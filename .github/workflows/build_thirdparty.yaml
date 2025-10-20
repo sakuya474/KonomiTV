@@ -1,0 +1,112 @@
+name: Build Thirdparty
+
+# thirdparty/ 以下のファイルに変更があったとき or
+# .github/workflows/build_thirdparty.yaml (このファイル) に変更があったとき or 他のワークフローからの呼び出し or 手動実行
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'thirdparty/**'
+      - '.github/workflows/build_thirdparty.yaml'
+  workflow_call:
+  workflow_dispatch:
+
+# ジョブの定義
+jobs:
+
+  # Windows 向けのサードパーティーライブラリのビルド
+  build-windows:
+    runs-on: windows-2022
+    steps:
+
+      # KonomiTV のソースコードをチェックアウト
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Python 3.11 環境をセットアップ
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'poetry'
+          cache-dependency-path: '${{ github.workspace }}/server/poetry.lock'
+
+      # サーバーの依存関係をインストール
+      - name: Install Dependencies
+        working-directory: server/
+        run: |
+          pip install poetry
+          poetry install --no-root
+
+      # サードパーティーライブラリをビルド
+      - name: Build Thirdparty Libraries
+        working-directory: server/
+        run: poetry run task update-thirdparty
+
+      # ビルドされたサードパーティーライブラリをアーカイブ
+      - name: Archive Thirdparty Libraries
+        run: |
+          cd server/thirdparty
+          7z a -t7z -mx=9 ../thirdparty-windows.7z *
+
+      # アーカイブされたサードパーティーライブラリを Artifact としてアップロード
+      - name: Upload Thirdparty Libraries as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: thirdparty-windows.7z
+          path: server/thirdparty-windows.7z
+
+  # Linux 向けのサードパーティーライブラリのビルド
+  build-linux:
+    strategy:
+      fail-fast: false  # 一つのビルドが失敗しても他のビルドは継続する
+      matrix:
+        include:
+          # x64 アーキテクチャ向けのビルド設定
+          - arch: amd64
+            runner: ubuntu-22.04
+            artifact_suffix: ''
+          # arm64 アーキテクチャ向けのビルド設定
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+            artifact_suffix: '-arm'
+    runs-on: ${{ matrix.runner }}
+    steps:
+
+      # KonomiTV のソースコードをチェックアウト
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Python 3.11 環境をセットアップ
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'poetry'
+          cache-dependency-path: '${{ github.workspace }}/server/poetry.lock'
+
+      # サーバーの依存関係をインストール
+      - name: Install Dependencies
+        working-directory: server/
+        run: |
+          pip install poetry
+          poetry install --no-root
+
+      # サードパーティーライブラリをビルド
+      - name: Build Thirdparty Libraries
+        working-directory: server/
+        run: poetry run task update-thirdparty
+
+      # ビルドされたサードパーティーライブラリをアーカイブ
+      - name: Archive Thirdparty Libraries
+        run: |
+          cd server/thirdparty
+          tar -cJf ../thirdparty-linux${{ matrix.artifact_suffix }}.tar.xz *
+
+      # アーカイブされたサードパーティーライブラリを Artifact としてアップロード
+      - name: Upload Thirdparty Libraries as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: thirdparty-linux${{ matrix.artifact_suffix }}.tar.xz
+          path: server/thirdparty-linux${{ matrix.artifact_suffix }}.tar.xz

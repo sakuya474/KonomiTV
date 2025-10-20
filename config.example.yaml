@@ -1,0 +1,202 @@
+#
+# ================================== 全般の設定 ==================================
+general:
+
+    # 利用するバックエンド
+    # EDCB・Mirakurun のいずれかを選択してください。
+    backend: 'EDCB'
+
+    # 利用するレコーダー（録画管理システム）
+    # EDCB・EPGStation のいずれかを選択してください。
+    # 重要: backend と recorder の組み合わせには制限があります:
+    #   - backend が EDCB の場合 → recorder も EDCB である必要があります
+    #   - backend が Mirakurun の場合 → recorder は EPGStation または EDCB を選択できます
+    # EPGStation をレコーダーとして使用する場合、backend を Mirakurun に、
+    # epgstation_url と mirakurun_url の両方を設定する必要があります。
+    # EDCB をレコーダーとして使用する場合（Mirakurun バックエンド時）、
+    # edcb_url の設定が必要です（EDCB-wine による録画管理を想定）。
+    recorder: 'EDCB'
+
+    # 利用するバックエンドが EDCB のとき、常に Mirakurun / mirakc から放送波を受信するか
+    # バックエンドに Mirakurun が選択されているときは効果がありません。
+    # EDCB に加えて mirakurun_url で指定した Mirakurun / mirakc にアクセスできる必要があります。
+    # EDCB はチューナー起動やチャンネル切り替えに時間がかかるため、Mirakurun / mirakc が利用できる環境であれば、この設定を有効にするとより快適に使えます。
+    always_receive_tv_from_mirakurun: false
+
+    # EDCB (EpgTimerNW) の TCP API の URL
+    # バックエンドまたはレコーダーに EDCB が選択されているときに利用されます。
+    # tcp://edcb-namedpipe/ と指定すると、TCP API の代わりに名前付きパイプを使って通信します (ローカルのみ)。
+    # 一部 Windows 環境では localhost の名前解決が遅いため、ストリーミング開始までの待機時間が長くなる場合があります。
+    # EDCB と同じ PC に KonomiTV をインストールしている場合、localhost ではなく 127.0.0.1 の利用を推奨します。
+    edcb_url: 'tcp://127.0.0.1:4510/'
+
+    # Mirakurun / mirakc の HTTP API の URL
+    # バックエンドに Mirakurun が選択されているときに利用されます。
+    # backend が Mirakurun の場合、番組表データの取得とライブ視聴に使用されます。
+    # 一部 Windows 環境では localhost の名前解決が遅いため、ストリーミング開始までの待機時間が長くなる場合があります。
+    # Mirakurun / mirakc と同じ PC に KonomiTV をインストールしている場合、localhost ではなく 127.0.0.1 の利用を推奨します。
+    mirakurun_url: 'http://127.0.0.1:40772/'
+
+    # EPGStation の HTTP API の URL
+    # レコーダーに EPGStation が選択されているときに利用されます（録画管理に使用）。
+    # EPGStation レコーダーを使用する場合、backend を Mirakurun に設定する必要があります。
+    # 番組表データは Mirakurun から取得され、録画管理のみ EPGStation を使用します。
+    # EPGStation と同じ PC に KonomiTV をインストールしている場合、localhost ではなく 127.0.0.1 の利用を推奨します。
+    epgstation_url: 'http://127.0.0.1:8888/'
+
+    # 利用するエンコーダー
+    # FFmpeg・QSVEncC・NVEncC・VCEEncC・rkmppenc から選択してください。
+    # FFmpeg はソフトウェアエンコーダーです。すべての PC で利用できますが、CPU に多大な負荷がかかり、パフォーマンスが悪いです。
+    # QSVEncC・NVEncC・VCEEncC・rkmppenc はハードウェアエンコーダーです。CPU 負荷が低く、パフォーマンスがとても高いです（おすすめ）。
+    # Intel Graphics 搭載の Intel CPU をお使いなら、QSVEncC が使えます。
+    # Geforce などの NVIDIA GPU をお使いなら、NVEncC が使えます。
+    # Radeon などの AMD GPU をお使いなら、VCEEncC が使えます。
+    # RK3588 などの Rockchip SoC 搭載の ARM SBC をお使いなら、rkmppenc が使えます (いくつか事前設定が必要です) 。
+    encoder: 'FFmpeg'
+
+    # 番組情報の更新間隔 (分)
+    # 番組情報を EDCB または Mirakurun / mirakc から取得する間隔を設定します。デフォルトは 5 (分) です。
+    program_update_interval: 5.0
+
+    # デバッグモードを有効にするか
+    # 有効にすると、デバッグログも出力されるようになります。
+    debug: false
+
+    # エンコーダーのログを有効にするか
+    # 有効にすると、ライブ視聴時のエンコーダーのログが server/logs/KonomiTV-Encoder-(ストリームID).log に保存されます。
+    # さらにデバッグモードが有効のときは、デバッグログとしてリアルタイムにエンコーダーのログが出力されます。
+    debug_encoder: false
+
+# ================================ サーバーの設定 ================================
+server:
+
+    # KonomiTV サーバーのリッスンポート
+    # デフォルトのリッスンポートは 7000 です。
+    port: 7000
+
+    # HTTPS リバースプロキシのカスタム HTTPS 証明書/秘密鍵ファイルへの絶対パス
+    # 設定すると、Akebi Keyless Server の代わりに、カスタム HTTPS 証明書を使って HTTPS リバースプロキシを開始します。
+    # カスタム HTTPS 証明書を有効化すると、https://192-168-x-xx.local.konomi.tv:7000/ の URL では KonomiTV にアクセスできなくなります。
+    # カスタム HTTPS 証明書を有効化するには、custom_https_certificate と custom_https_private_key の両方に設定が必要です。
+    # 基本的に変更する必要はありません。HTTPS 証明書について詳細に理解している方のみ設定してください。
+    custom_https_certificate: null
+    custom_https_private_key: null
+
+# ======================= テレビのライブストリーミングの設定 =======================
+tv:
+
+    # 誰も見ていないチャンネルのエンコードタスクを何秒まで維持するか
+    # 10 秒に設定したなら、10 秒間誰も見ていない状態が継続したらエンコードタスク（エンコーダー）を終了します。
+    # 0 秒に設定すると、ネット回線が瞬断したりリロードしただけでチューナーとエンコーダーの再起動が必要になり、
+    # 再生復帰までに時間がかかります。余裕をもたせておく事をおすすめします。
+    max_alive_time: 10
+
+    # デバッグ用に再生する TS ファイルの絶対パス（デバッグ用設定のため、変更は推奨しない）
+    # この値に TS ファイルのパスを指定すると、すべてのチャンネルにおいて、ストリーミングされる映像（字幕・文字スーパーを含む）が
+    # リアルタイムで放送されているものから、指定した TS ファイルのものに強制的に置き換えられます。
+    # 開発者がライブストリーミング関連の機能をテストするために使う特殊なデバッグ用設定です。
+    debug_mode_ts_path: null
+
+# ==================== ビデオのオンデマンドストリーミングの設定 ====================
+video:
+
+    # 録画済み番組の保存先フォルダの絶対パス
+    # 複数の保存先フォルダを指定できます。
+    # Docker でインストールした場合も、ホストマシン側のフォルダの絶対パスを指定してください。
+    recorded_folders: [
+        'E:\TV-Record',
+    ]
+
+    # BDライブラリの保存先フォルダの絶対パス
+    # BDディスクの映像ファイルが保存されているフォルダのパスを指定してください。
+    # 複数の保存先フォルダを指定できます。
+    # Docker でインストールした場合も、ホストマシン側のフォルダの絶対パスを指定してください。
+    bd_library_folders: [
+        'E:\BD-Library',
+    ]
+
+# =============================== キャプチャの設定 ===============================
+capture:
+
+    # アップロードしたキャプチャ画像の保存先フォルダの絶対パス
+    # クライアントの [キャプチャの保存先] 設定で [KonomiTV サーバーにアップロード] または
+    # [ブラウザでのダウンロードと、KonomiTV サーバーへのアップロードを両方行う] が選択されているときに利用されます。
+    # 複数の保存先フォルダを指定できます。先頭から順に利用され、保存先フォルダがいっぱいになったら次の保存先フォルダに保存されます。
+    # Docker でインストールした場合も、ホストマシン側のフォルダの絶対パスを指定してください。
+    upload_folders: [
+        'E:\TV-Capture',
+    ]
+
+# ============================== Discord連携の設定 ==============================
+discord:
+
+    # Discord連携を有効にするか
+    enabled: true
+
+    # Discord Bot のトークン
+    # Discord Bot を作成し、そのトークンをここに入力してください。
+    token: 'YOUR_DISCORD_BOT_TOKEN'
+
+    # 通知を送信する Discord チャンネルの ID
+    # 通知を送信したいチャンネルで右クリックし、「IDをコピー」で取得した ID を入力してください。
+    channel_id: ''
+
+    # サーバーの起動/終了時に通知を送信するか
+    notify_server: true
+
+    # 録画予約の開始/完了時に通知を送信するか
+    notify_recording: true
+
+    # メンテナンスコマンドを許可するユーザーのID
+    maintenance_user_ids: [
+        ''
+    ]
+
+# =============================== TSReplace エンコードの設定 ===============================
+tsreplace_encoding:
+    # 自動エンコード機能を有効にするか
+    auto_encoding_enabled: false
+
+    # エンコード済みファイルの保存先フォルダ
+    # nullの場合は元ファイルと同じフォルダに保存される
+    encoded_folder: 'E:\TV-Record\Encoded'
+
+    # エンコード完了後に元ファイルを削除するかのデフォルト設定
+    delete_original_default: false
+
+    # 同時実行可能なエンコードタスク数
+    max_concurrent_tasks: 1
+
+    # エンコードタスクのタイムアウト時間（分）
+    task_timeout_minutes: 180
+
+    # 自動エンコードのコーデック (h264 または hevc)
+    auto_encoding_codec: 'h264'
+
+    # 自動エンコードのエンコーダー (software または hardware)
+    auto_encoding_encoder: 'hardware'
+
+    # 自動エンコード後に元ファイルを削除するか
+    delete_original_after_encoding: false
+
+    # エンコード品質プリセット
+    encoding_quality_preset: 'medium'
+
+    # 同時実行可能なエンコード数（自動エンコード用）
+    max_concurrent_encodings: 1
+
+    # ハードウェアエンコーダーの利用可否（自動検出される）
+    hardware_encoder_available: true
+
+    # 利用するハードウェアエンコーダーの種類(Nvidia (NVEncC), Intel (QSVEncC), AMD (VCEEncC))
+    hardware_encoder_type: 'amd'
+
+    # 各エンコーダーのオプション(高度な設定のため、よくわからないそのままにしておくことを推奨)
+    ffmpeg_h264_options: '-y -f mpegts -i - -copyts -start_at_zero -vf yadif -an -c:v libx264 -preset slow -crf 23 -g 90 -f mpegts -'
+    ffmpeg_hevc_options: '-y -f mpegts -i - -copyts -start_at_zero -vf yadif -an -c:v libx265 -preset slow -crf 23 -g 90 -f mpegts -'
+    nvidia_h264_options: '-i - --input-format mpegts --tff --vpp-deinterlace normal -c h264 --qvbr 23 --gop-len 90 --output-format mpegts -o -'
+    nvidia_hevc_options: '-i - --input-format mpegts --tff --vpp-deinterlace normal -c hevc --qvbr 23 --gop-len 90 --output-format mpegts -o -'
+    amd_h264_options: '-i - --input-format mpegts --interlace tff --vpp-afs -c h264 --cqp 23 --gop-len 90 --output-format mpegts -o -'
+    amd_hevc_options: '-i - --input-format mpegts --interlace tff --vpp-afs -c hevc --cqp 23 --gop-len 90 --output-format mpegts -o -'
+    intel_h264_options: '-i - --input-format mpegts --tff --vpp-deinterlace normal -c h264 --icq 23 --gop-len 90 --output-format mpegts -o -'
+    intel_hevc_options: '-i - --input-format mpegts --tff --vpp-deinterlace normal -c hevc --icq 23 --gop-len 90 --output-format mpegts -o -'

@@ -1,0 +1,363 @@
+
+import APIClient from '@/services/APIClient';
+import { getSyncableClientSettings } from '@/stores/SettingsStore';
+
+
+/**
+ * ミュート対象のコメントのキーワードのインターフェイス
+ */
+export interface IMutedCommentKeywords {
+    match: 'partial' | 'forward' | 'backward' | 'exact' | 'regex';
+    pattern: string;
+}
+
+/**
+ * サーバーに保存されるクライアント設定を表すインターフェース
+ * サーバー側の app.config.ClientSettings で定義されているものと同じ
+ */
+export interface IClientSettings {
+    last_synced_at: number;
+    // showed_panel_last_time: 同期無効
+    // selected_twitter_account_id: 同期無効
+    saved_twitter_hashtags: string[];
+    mylist: {
+        type: 'Series' | 'RecordedProgram';
+        id: number;
+        created_at: number;
+    }[];
+    watched_history: {
+        video_id: number;
+        last_playback_position: number;
+        created_at: number;
+        updated_at: number;
+    }[];
+    // lshaped_screen_crop_enabled: 同期無効
+    // lshaped_screen_crop_zoom_level: 同期無効
+    // lshaped_screen_crop_x_position: 同期無効
+    // lshaped_screen_crop_y_position: 同期無効
+    // lshaped_screen_crop_zoom_origin: 同期無効
+    pinned_channel_ids: string[];
+    panel_display_state: 'RestorePreviousState' | 'AlwaysDisplay' | 'AlwaysFold';
+    tv_panel_active_tab: 'Program' | 'Channel' | 'Comment' | 'Twitter';
+    video_panel_active_tab: 'RecordedProgram' | 'Series' | 'Comment' | 'Twitter';
+    show_player_background_image: boolean;
+    use_pure_black_player_background: boolean;
+    tv_channel_selection_requires_alt_key: boolean;
+    use_28hour_clock: boolean;
+    // tv_streaming_quality: 同期無効
+    // tv_streaming_quality_cellular: 同期無効
+    // tv_data_saver_mode: 同期無効
+    // tv_data_saver_mode_cellular: 同期無効
+    // tv_low_latency_mode: 同期無効
+    // tv_low_latency_mode_cellular: 同期無効
+    // video_streaming_quality: 同期無効
+    // video_streaming_quality_cellular: 同期無効
+    // video_data_saver_mode: 同期無効
+    // video_data_saver_mode_cellular: 同期無効
+    caption_font: string;
+    always_border_caption_text: boolean;
+    specify_caption_opacity: boolean;
+    caption_opacity: number;
+    tv_show_superimpose: boolean;
+    video_show_superimpose: boolean;
+    // tv_show_data_broadcasting: 同期無効
+    // enable_internet_access_from_data_broadcasting: 同期無効
+    capture_save_mode: 'Browser' | 'UploadServer' | 'Both';
+    capture_caption_mode: 'VideoOnly' | 'CompositingCaption' | 'Both';
+    capture_filename_pattern: string;
+    // capture_copy_to_clipboard: 同期無効
+    // sync_settings: 同期無効
+    prefer_posting_to_nicolive: boolean;
+    comment_speed_rate: number;
+    comment_font_size: number;
+    close_comment_form_after_sending: boolean;
+    mute_vulgar_comments: boolean;
+    mute_abusive_discriminatory_prejudiced_comments: boolean;
+    mute_big_size_comments: boolean;
+    mute_fixed_comments: boolean;
+    mute_colored_comments: boolean;
+    mute_consecutive_same_characters_comments: boolean;
+    muted_comment_keywords: IMutedCommentKeywords[];
+    muted_niconico_user_ids: string[];
+    fold_panel_after_sending_tweet: boolean;
+    reset_hashtag_when_program_switches: boolean;
+    auto_add_watching_channel_hashtag: boolean;
+    twitter_active_tab: 'Search' | 'Timeline' | 'Capture';
+    tweet_hashtag_position: 'Prepend' | 'Append' | 'PrependWithLineBreak' | 'AppendWithLineBreak';
+    tweet_capture_watermark_position: 'None' | 'TopLeft' | 'TopRight' | 'BottomLeft' | 'BottomRight';
+    tsreplace_auto_encoding_enabled: boolean;
+    tsreplace_auto_encoding_codec: 'h264' | 'hevc';
+    tsreplace_auto_encoding_encoder: 'software' | 'hardware';
+    tsreplace_delete_original_after_encoding: boolean;
+    tsreplace_encoding_quality_preset: string;
+    tsreplace_max_concurrent_encodings: number;
+    tsreplace_hardware_encoder_available: boolean;
+    tsreplace_continue_on_missing_record: boolean;
+    tsreplace_max_retry_count: number;
+}
+
+/**
+ * サーバー設定を表すインターフェース
+ * サーバー側の app.config.ServerSettings で定義されているものと同じ
+ */
+export interface IServerSettings {
+    general: {
+        backend: 'EDCB' | 'Mirakurun';
+        recorder: 'EDCB' | 'EPGStation';
+        always_receive_tv_from_mirakurun: boolean;
+        edcb_url: string;
+        mirakurun_url: string;
+        epgstation_url: string;
+        encoder: 'FFmpeg' | 'QSVEncC' | 'NVEncC' | 'VCEEncC' | 'rkmppenc';
+        program_update_interval: number;
+        debug: boolean;
+        debug_encoder: boolean;
+    };
+    server: {
+        port: number;
+        custom_https_certificate: string | null;
+        custom_https_private_key: string | null;
+    };
+    tv: {
+        max_alive_time: number;
+        debug_mode_ts_path: string | null;
+    };
+    video: {
+        recorded_folders: string[];
+        bd_library_folders: string[];
+    };
+    capture: {
+        upload_folders: string[];
+    };
+    discord: {
+        enabled: boolean;
+        token: string | null;
+        channel_id: string | null;
+        notify_server: boolean;
+        notify_recording: boolean;
+    };
+    tsreplace_encoding: {
+        auto_encoding_enabled: boolean;
+        auto_encoding_codec: 'h264' | 'hevc';
+        auto_encoding_encoder: 'software' | 'hardware';
+        hardware_encoder_type: 'nvidia' | 'amd' | 'intel';
+        delete_original_after_encoding: boolean;
+        encoding_quality_preset: string;
+        max_concurrent_encodings: number;
+        hardware_encoder_available: boolean;
+        ffmpeg_h264_options: string;
+        ffmpeg_hevc_options: string;
+        nvidia_h264_options: string;
+        nvidia_hevc_options: string;
+        amd_h264_options: string;
+        amd_hevc_options: string;
+        intel_h264_options: string;
+        intel_hevc_options: string;
+    };
+}
+
+/* サーバー設定を表すインターフェースのデフォルト値 */
+export const IServerSettingsDefault: IServerSettings = {
+    general: {
+        backend: 'EDCB',
+        recorder: 'EDCB',
+        always_receive_tv_from_mirakurun: false,
+        edcb_url: 'tcp://127.0.0.1:4510/',
+        mirakurun_url: 'http://127.0.0.1:40772/',
+        epgstation_url: 'http://127.0.0.1:8888/',
+        encoder: 'FFmpeg',
+        program_update_interval: 5.0,
+        debug: false,
+        debug_encoder: false,
+    },
+    server: {
+        port: 7000,
+        custom_https_certificate: null,
+        custom_https_private_key: null,
+    },
+    tv: {
+        max_alive_time: 10,
+        debug_mode_ts_path: null,
+    },
+    video: {
+        recorded_folders: [],
+        bd_library_folders: [],
+    },
+    capture: {
+        upload_folders: [],
+    },
+    discord: {
+        enabled: false,
+        token: null,
+        channel_id: null,
+        notify_server: false,
+        notify_recording: false,
+    },
+    tsreplace_encoding: {
+        auto_encoding_enabled: false,
+        auto_encoding_codec: 'h264',
+        auto_encoding_encoder: 'software',
+        hardware_encoder_type: 'nvidia',
+        delete_original_after_encoding: false,
+        encoding_quality_preset: 'medium',
+        max_concurrent_encodings: 1,
+        hardware_encoder_available: false,
+        ffmpeg_h264_options: '--crf 23 --preset medium',
+        ffmpeg_hevc_options: '--crf 23 --preset medium',
+        nvidia_h264_options: '--codec h264 --cqp 23 --preset quality',
+        nvidia_hevc_options: '--codec hevc --cqp 23 --preset quality',
+        amd_h264_options: '--codec h264 --cqp 23 --quality quality',
+        amd_hevc_options: '--codec hevc --cqp 23 --quality quality',
+        intel_h264_options: '--codec h264 --cqp 23 --quality balanced',
+        intel_hevc_options: '--codec hevc --cqp 23 --quality balanced',
+    },
+};
+
+
+class Settings {
+
+    /**
+     * クライアント設定を取得する
+     * @return クライアント設定 (取得に失敗した場合は null)
+     */
+    static async fetchClientSettings(): Promise<IClientSettings | null> {
+
+        // API リクエストを実行
+        const response = await APIClient.get<IClientSettings>('/settings/client');
+
+        // エラー処理 (基本起こらないはず & 実行できなくても後続の処理に影響しないため何もしない)
+        if (response.type === 'error') {
+            return null;
+        }
+
+        // クライアント側の IClientSettings とサーバー側の app.config.ClientSettings は、バージョン差などで微妙に並び替え順序などが異なることがある
+        // ハッシュ化時の文字列比較を正しく行うため、厳密にクライアント側の IClientSettings と一致するように変換する
+        return getSyncableClientSettings(response.data);
+    }
+
+
+    /**
+     * クライアント設定を更新する
+     * @param settings クライアント設定
+     * @return 成功した場合は true
+     */
+    static async updateClientSettings(settings: IClientSettings): Promise<boolean> {
+
+        // API リクエストを実行
+        const response = await APIClient.put<IClientSettings>('/settings/client', settings);
+
+        // エラー処理
+        if (response.type === 'error') {
+            switch (response.data.detail) {
+                default:
+                    APIClient.showGenericError(response, 'クライアント設定を更新できませんでした。');
+                    break;
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+
+    /**
+     * サーバー設定を取得する
+     * @return サーバー設定 (取得に失敗した場合は null)
+     */
+    static async fetchServerSettings(): Promise<IServerSettings | null> {
+
+        // API リクエストを実行
+        const response = await APIClient.get<IServerSettings>('/settings/server');
+
+        // エラー処理
+        if (response.type === 'error') {
+            switch (response.data.detail) {
+                default:
+                    APIClient.showGenericError(response, 'サーバー設定を取得できませんでした。');
+                    break;
+            }
+            return null;
+        }
+
+        const settings = response.data;
+
+        // channel_id を確実に文字列として扱う（数値精度問題の回避）
+        if (settings.discord.channel_id !== null) {
+            settings.discord.channel_id = String(settings.discord.channel_id);
+        }
+
+        return settings;
+    }
+
+    /**
+     * サーバー設定を更新する
+     * @param settings サーバー設定
+     * @return 成功した場合は true
+     */
+    static async updateServerSettings(settings: IServerSettings): Promise<boolean> {
+
+        // API リクエストを実行
+        const response = await APIClient.put<IServerSettings>('/settings/server', settings);
+
+        // エラー処理
+        if (response.type === 'error') {
+            switch (response.data.detail) {
+                default:
+                    APIClient.showGenericError(response, 'サーバー設定を更新できませんでした。');
+                    break;
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * BDライブラリフォルダの一括スキャンを実行
+     */
+    static async runBDLibraryScan(): Promise<boolean> {
+        const response = await APIClient.post('/maintenance/run-bd-library-scan');
+        if (response.type === 'error') {
+            APIClient.showGenericError(response, 'BDライブラリフォルダの一括スキャンを実行できませんでした。');
+            return false;
+        }
+        return true;
+    }
+    /**
+     * Discord の接続状態を取得する
+     * @returns Discord の接続状態
+     */
+    static async fetchDiscordStatus(): Promise<{connected: boolean}> {
+        try {
+            const response = await APIClient.get<{connected: boolean}>('/discord/status');
+            if (response.type === 'success') {
+                return response.data;
+            }
+            console.error('Discord status check failed:', response.data.detail);
+            return { connected: false };
+        } catch (error) {
+            console.error('Discord status check failed:', error);
+            return { connected: false };
+        }
+    }
+
+    /**
+     * ハードウェアエンコーダーの利用可否を取得する
+     * @returns ハードウェアエンコーダーの利用可否情報
+     */
+    static async fetchHardwareEncoderStatus(): Promise<{hardware_encoder_available: boolean, encoder_name: string, available_codecs: string[]}> {
+        try {
+            const response = await APIClient.get<{hardware_encoder_available: boolean, encoder_name: string, available_codecs: string[]}>('/settings/tsreplace-encoding/hardware-encoder-status');
+            if (response.type === 'success') {
+                return response.data;
+            }
+            console.error('Hardware encoder status check failed:', response.data.detail);
+            return { hardware_encoder_available: false, encoder_name: '', available_codecs: [] };
+        } catch (error) {
+            console.error('Hardware encoder status check failed:', error);
+            return { hardware_encoder_available: false, encoder_name: '', available_codecs: [] };
+        }
+    }
+}
+
+export default Settings;

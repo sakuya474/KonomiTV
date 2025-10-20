@@ -1,0 +1,718 @@
+
+import asyncio
+import concurrent.futures
+import platform
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Annotated, Any, Literal, cast
+
+import httpx
+import psutil
+import ruamel.yaml
+import ruamel.yaml.scalarstring
+from pydantic import (
+    BaseModel,
+    DirectoryPath,
+    FilePath,
+    PositiveFloat,
+    PositiveInt,
+    UrlConstraints,
+    ValidationError,
+    ValidationInfo,
+    confloat,
+    field_serializer,
+    field_validator,
+)
+from pydantic_core import Url
+
+from app.constants import (
+    API_REQUEST_HEADERS,
+    BASE_DIR,
+    LIBRARY_PATH,
+)
+
+
+# クライアント設定を表す Pydantic モデル (クライアント設定同期用 API で利用)
+# デバイス間で同期するとかえって面倒なことになりそうな設定は除外されている
+# 詳細は client/src/services/Settings.ts と client/src/stores/SettingsStore.ts を参照
+
+class ClientSettings(BaseModel):
+    last_synced_at: Annotated[float, PositiveFloat] = 0.0
+    # showed_panel_last_time: 同期無効
+    # selected_twitter_account_id: 同期無効
+    saved_twitter_hashtags: list[str] = []
+    mylist: list[dict[str, Any]] = []
+    watched_history: list[dict[str, Any]] = []
+    # lshaped_screen_crop_enabled: 同期無効
+    # lshaped_screen_crop_zoom_level: 同期無効
+    # lshaped_screen_crop_x_position: 同期無効
+    # lshaped_screen_crop_y_position: 同期無効
+    # lshaped_screen_crop_zoom_origin: 同期無効
+    pinned_channel_ids: list[str] = []
+    panel_display_state: Literal['RestorePreviousState', 'AlwaysDisplay', 'AlwaysFold'] = 'RestorePreviousState'
+    tv_panel_active_tab: Literal['Program', 'Channel', 'Comment', 'Twitter'] = 'Program'
+    video_panel_active_tab: Literal['RecordedProgram', 'Series', 'Comment', 'Twitter'] = 'RecordedProgram'
+    show_player_background_image: bool = True
+    use_pure_black_player_background: bool = False
+    tv_channel_selection_requires_alt_key: bool = False
+    use_28hour_clock: bool = False
+    # tv_streaming_quality: 同期無効
+    # tv_streaming_quality_cellular: 同期無効
+    # tv_data_saver_mode: 同期無効
+    # tv_data_saver_mode_cellular: 同期無効
+    # tv_low_latency_mode: 同期無効
+    # tv_low_latency_mode_cellular: 同期無効
+    # video_streaming_quality: 同期無効
+    # video_streaming_quality_cellular: 同期無効
+    # video_data_saver_mode: 同期無効
+    # video_data_saver_mode_cellular: 同期無効
+    caption_font: str = 'Windows TV MaruGothic'
+    always_border_caption_text: bool = True
+    specify_caption_opacity: bool = False
+    caption_opacity: Annotated[float, confloat(ge=0.0, le=1.0)] = 1.0
+    tv_show_superimpose: bool = True
+    video_show_superimpose: bool = False
+    # tv_show_data_broadcasting: 同期無効
+    # enable_internet_access_from_data_broadcasting: 同期無効
+    capture_save_mode: Literal['Browser', 'UploadServer', 'Both'] = 'UploadServer'
+    capture_caption_mode: Literal['VideoOnly', 'CompositingCaption', 'Both'] = 'Both'
+    capture_filename_pattern: str = 'Capture_%date%-%time%'
+    # capture_copy_to_clipboard: 同期無効
+    # sync_settings: 同期無効
+    prefer_posting_to_nicolive: bool = True
+    comment_speed_rate: Annotated[float, PositiveFloat] = 1.0
+    comment_font_size: Annotated[int, PositiveInt] = 34
+    close_comment_form_after_sending: bool = True
+    mute_vulgar_comments: bool = True
+    mute_abusive_discriminatory_prejudiced_comments: bool = True
+    mute_big_size_comments: bool = True
+    mute_fixed_comments: bool = False
+    mute_colored_comments: bool = False
+    mute_consecutive_same_characters_comments: bool = False
+    muted_comment_keywords: list[dict[str, str]] = []
+    muted_niconico_user_ids: list[str] = []
+    fold_panel_after_sending_tweet: bool = False
+    reset_hashtag_when_program_switches: bool = True
+    auto_add_watching_channel_hashtag: bool = True
+    twitter_active_tab: Literal['Search', 'Timeline', 'Capture'] = 'Capture'
+    tweet_hashtag_position: Literal['Prepend', 'Append', 'PrependWithLineBreak', 'AppendWithLineBreak'] = 'Append'
+    tweet_capture_watermark_position: Literal['None', 'TopLeft', 'TopRight', 'BottomLeft', 'BottomRight'] = 'None'
+
+
+# サーバー設定を表す Pydantic モデル
+# config.yaml のバリデーションは設定データをこの Pydantic モデルに通すことで行う
+
+class _ServerSettingsGeneral(BaseModel):
+    backend: Literal['EDCB', 'Mirakurun'] = 'EDCB'
+    recorder: Literal['EDCB', 'EPGStation'] = 'EDCB'
+    always_receive_tv_from_mirakurun: bool = False
+    edcb_url: Annotated[Url, UrlConstraints(allowed_schemes=['tcp'])] = Url('tcp://127.0.0.1:4510/')
+    mirakurun_url: Annotated[Url, UrlConstraints(allowed_schemes=['http', 'https'])] = Url('http://127.0.0.1:40772/')
+    epgstation_url: Annotated[Url, UrlConstraints(allowed_schemes=['http', 'https'])] = Url('http://127.0.0.1:8888/')
+    encoder: Literal['FFmpeg', 'QSVEncC', 'NVEncC', 'VCEEncC', 'rkmppenc'] = 'FFmpeg'
+    program_update_interval: Annotated[float, confloat(ge=0.1)] = 5.0
+    debug: bool = False
+    debug_encoder: bool = False
+
+    @field_validator('recorder')
+    @classmethod
+    def validate_backend_recorder_combination(cls, recorder: str, info: ValidationInfo) -> str:
+        """
+        backend と recorder の組み合わせが適切かをチェックする
+        """
+        # バリデーションをスキップする場合はここで終了
+        if type(info.context) is dict and info.context.get('bypass_validation') is True:
+            return recorder
+
+        backend = info.data.get('backend')
+        if backend == 'EDCB' and recorder == 'EPGStation':
+            raise ValueError(
+                'バックエンドが EDCB の場合、レコーダーに EPGStation は使用できません。\n'
+                'EPGStation を使用する場合は、backend を Mirakurun に変更してください。\n'
+                '（EPGStation は Mirakurun を前提としたシステムです）'
+            )
+        # backend が Mirakurun の場合、recorder は EPGStation または EDCB を選択可能
+        # （EDCB の場合は EDCB-wine による録画管理を想定）
+        return recorder
+
+    @field_validator('edcb_url')
+    def validate_edcb_url(cls, edcb_url: Url, info: ValidationInfo) -> Url:
+        # URL を末尾のスラッシュありに統一
+        edcb_url = Url(str(edcb_url).rstrip('/') + '/')
+        # バリデーションをスキップする場合はここで終了
+        if type(info.context) is dict and info.context.get('bypass_validation') is True:
+            return edcb_url
+        # EDCB バックエンドまたはレコーダーの接続確認
+        if info.data.get('backend') == 'EDCB' or info.data.get('recorder') == 'EDCB':
+            # 循環参照を避けるために遅延インポート
+            from app.utils.edcb.EDCBUtil import EDCBUtil
+            # edcb_url を明示的に指定
+            ## edcb_url を省略すると内部で再帰的に LoadConfig() が呼ばれてしまい RecursionError が発生する
+            edcb_host = EDCBUtil.getEDCBHost(edcb_url)
+            edcb_port = EDCBUtil.getEDCBPort(edcb_url)
+            # ホスト名またはポートが指定されていない
+            if ((edcb_host is None) or (edcb_port is None and edcb_host != 'edcb-namedpipe')):
+                raise ValueError(
+                    'URL 内にホスト名またはポートが指定されていません。\n'
+                    'EDCB の URL を間違えている可能性があります。'
+                )
+            # 現在の EpgTimerSrv の動作ステータスを取得できるか試してみる
+            ## RecursionError 回避のために edcb_url を明示的に指定
+            ## ThreadPoolExecutor 上で実行し、自動リロードモード時に発生するイベントループ周りの謎エラーを回避する
+            with concurrent.futures.ThreadPoolExecutor(1) as executor:
+                result = executor.submit(asyncio.run, EDCBUtil.getEDCBStatus(edcb_url)).result()
+            if result == 'Unknown':
+                raise ValueError(
+                    f'EDCB ({edcb_url}) にアクセスできませんでした。\n'
+                    'EDCB が起動していないか、URL を間違えている可能性があります。'
+                )
+            from app import logging
+            logging.info(f'Backend: EDCB ({edcb_url}) Status: {result}')
+        return edcb_url
+
+    @field_validator('mirakurun_url')
+    def validate_mirakurun_url(cls, mirakurun_url: Url, info: ValidationInfo) -> Url:
+        # URL を末尾のスラッシュありに統一
+        ## HTTP/HTTPS URL では Pydantic の Url インスタンスが自動的に末尾のスラッシュを付けてしまうようだが、
+        ## 挙動が変わらないとも限らないので、一応明示的に付けておく
+        mirakurun_url = Url(str(mirakurun_url).rstrip('/') + '/')
+        # バリデーションをスキップする場合はここで終了
+        if type(info.context) is dict and info.context.get('bypass_validation') is True:
+            return mirakurun_url
+        # Mirakurun バックエンドの接続確認
+        if info.data.get('backend') == 'Mirakurun' or info.data.get('always_receive_tv_from_mirakurun') is True:
+            # 試しにリクエストを送り、200 (OK) が返ってきたときだけ有効な URL とみなす
+            try:
+                response = httpx.get(
+                    # Mirakurun API は http://127.0.0.1:40772//api/version のような二重スラッシュを許容しないので、
+                    # mirakurun_url の末尾のスラッシュを削除してから endpoint を追加する必要がある
+                    url = str(mirakurun_url).rstrip('/') + '/api/version',
+                    headers = API_REQUEST_HEADERS,
+                    timeout = 20,  # 久々のアクセスだとなぜか時間がかかることがあるため、ここだけタイムアウトを長めに設定
+                )
+                # レスポンスヘッダーの server が mirakc であれば mirakc と判定できる
+                if ('server' in response.headers) and ('mirakc' in response.headers['server']):
+                    mirakurun_or_mirakc = 'mirakc'
+                else:
+                    mirakurun_or_mirakc = 'Mirakurun'
+            except (httpx.NetworkError, httpx.TimeoutException):
+                raise ValueError(
+                    f'Mirakurun / mirakc ({mirakurun_url}) にアクセスできませんでした。\n'
+                    'Mirakurun / mirakc が起動していないか、URL を間違えている可能性があります。'
+                )
+            try:
+                response_json = response.json()
+                if response.status_code != 200 or response_json.get('current') is None:
+                    raise ValueError()
+            except Exception:
+                raise ValueError(
+                    f'{mirakurun_url} は {mirakurun_or_mirakc} の URL ではありません。\n'
+                    f'{mirakurun_or_mirakc} の URL を間違えている可能性があります。'
+                )
+            from app import logging
+            logging.info(f'Backend: {mirakurun_or_mirakc} {response_json.get("current")} ({mirakurun_url})')
+            if info.data.get('always_receive_tv_from_mirakurun') is True:
+                logging.info(f'Always receive TV from {mirakurun_or_mirakc}.')
+            # backend が Mirakurun の場合、番組表データも Mirakurun から取得される
+            # EPGStation レコーダー使用時（backend が Mirakurun のときのみ可能）もこのメッセージを出力
+            if info.data.get('backend') == 'Mirakurun':
+                if info.data.get('recorder') == 'EPGStation':
+                    logging.info(f'EPG data will be retrieved from {mirakurun_or_mirakc} (EPGStation recorder mode).')
+                else:
+                    logging.info(f'EPG data will be retrieved from {mirakurun_or_mirakc}.')
+        return mirakurun_url
+
+    @field_validator('epgstation_url')
+    def validate_epgstation_url(cls, epgstation_url: Url, info: ValidationInfo) -> Url:
+        epgstation_url = Url(str(epgstation_url).rstrip('/') + '/')
+        # バリデーションをスキップする場合はここで終了
+        if type(info.context) is dict and info.context.get('bypass_validation') is True:
+            return epgstation_url
+        # EPGStation レコーダーの接続確認
+        if info.data.get('recorder') == 'EPGStation':
+            # 試しにリクエストを送り、200 (OK) が返ってきたときだけ有効な URL とみなす
+            try:
+                response = httpx.get(
+                    url = str(epgstation_url).rstrip('/') + '/api/version',
+                    headers = API_REQUEST_HEADERS,
+                    timeout = 20,
+                )
+            except (httpx.NetworkError, httpx.TimeoutException):
+                raise ValueError(
+                    f'EPGStation ({epgstation_url}) にアクセスできませんでした。\n'
+                    'EPGStation が起動していないか、URL を間違えている可能性があります。'
+                )
+            try:
+                response_json = response.json()
+                if response.status_code != 200 or response_json.get('version') is None:
+                    raise ValueError()
+            except Exception:
+                raise ValueError(
+                    f'{epgstation_url} は EPGStation の URL ではありません。\n'
+                    'EPGStation の URL を間違えている可能性があります。'
+                )
+            from app import logging
+            logging.info(f'Recorder: EPGStation {response_json.get("version")} ({epgstation_url})')
+        return epgstation_url
+
+    @field_validator('encoder')
+    def validate_encoder(cls, encoder: str, info: ValidationInfo) -> str:
+        # バリデーションをスキップする場合はここで終了
+        if type(info.context) is dict and info.context.get('bypass_validation') is True:
+            return encoder
+        from app import logging
+        current_arch = platform.machine()
+        # x64 なのにエンコーダーとして rkmppenc が指定されている場合
+        if current_arch in ['AMD64', 'x86_64'] and encoder == 'rkmppenc':
+            raise ValueError(
+                'x64 アーキテクチャでは rkmppenc は使用できません。\n'
+                '利用するエンコーダーを FFmpeg・QSVEncC・NVEncC・VCEEncC のいずれかに変更してください。'
+            )
+        # arm64 なのにエンコーダーとして QSVEncC・NVEncC・VCEEncC が指定されている場合
+        if current_arch == 'aarch64' and encoder in ['QSVEncC', 'NVEncC', 'VCEEncC']:
+            raise ValueError(
+                'arm64 アーキテクチャでは QSVEncC・NVEncC・VCEEncC は使用できません。\n'
+                '利用するエンコーダーを FFmpeg・rkmppenc のいずれかに変更してください。'
+            )
+        # HWEncC が指定されているときのみ、--check-hw でハードウェアエンコーダーが利用できるかをチェック
+        ## もし利用可能なら標準出力に "H.264/AVC" という文字列が出力されるので、それで判定する
+        if encoder != 'FFmpeg':
+            result = subprocess.run(
+                [LIBRARY_PATH[encoder], '--check-hw'],
+                stdout = subprocess.PIPE,
+                stderr = subprocess.DEVNULL,
+            )
+            result_stdout = result.stdout.decode('utf-8')
+            result_stdout = '\n'.join([line for line in result_stdout.split('\n') if 'reader:' not in line])
+            if 'unavailable.' in result_stdout:
+                raise ValueError(
+                    f'お使いの環境では {encoder} がサポートされていないため、KonomiTV を起動できません。\n'
+                    f'別のエンコーダーを選択するか、{encoder} の動作環境を整備してください。'
+                )
+            # H.265/HEVC に対応していない環境では、通信節約モードが利用できない旨を出力する
+            if 'H.265/HEVC' not in result_stdout:
+                logging.warning(f'お使いの環境では {encoder} での H.265/HEVC エンコードがサポートされていないため、通信節約モードは利用できません。')
+        # エンコーダーのバージョン情報を取得する
+        ## バージョン情報は出力の1行目にある
+        result = subprocess.run(
+            [LIBRARY_PATH[encoder], '--version'],
+            stdout = subprocess.PIPE,
+            stderr = subprocess.STDOUT,
+        )
+        encoder_version = result.stdout.decode('utf-8').split('\n')[0]
+        ## Copyright (FFmpeg) と by rigaya (HWEncC) 以降の文字列を削除
+        encoder_version = re.sub(r' Copyright.*$', '', encoder_version)
+        encoder_version = re.sub(r' by rigaya.*$', '', encoder_version)
+        encoder_version = encoder_version.replace('ffmpeg', 'FFmpeg').strip()
+        logging.info(f'Encoder: {encoder_version}')
+        return encoder
+
+class _ServerSettingsServer(BaseModel):
+    port: PositiveInt = 7000
+    custom_https_certificate: FilePath | None = None
+    custom_https_private_key: FilePath | None = None
+
+    @field_validator('port')
+    def validate_port(cls, port: int, info: ValidationInfo) -> int:
+        # バリデーションをスキップする場合はここで終了
+        if type(info.context) is dict and info.context.get('bypass_validation') is True:
+            return port
+        # リッスンするポート番号が 1024 ~ 65525 の間に収まっているかをチェック
+        if port < 1024 or port > 65525:
+            raise ValueError(
+                'ポート番号の設定が不正なため、KonomiTV を起動できません。\n'
+                '設定したポート番号が 1024 ~ 65525 (65535 ではない) の間に収まっているかを確認してください。'
+            )
+        # 使用中のポートを取得
+        # ref: https://qiita.com/skokado/items/6e76762c68866d73570b
+        current_process = psutil.Process()
+        used_ports: list[int] = []
+        for conn in psutil.net_connections():
+            if conn.status == 'LISTEN':
+                if conn.pid is None:
+                    continue
+                # 自分自身のプロセスは除外
+                ## サーバーの起動中に再度バリデーションが実行された際に、ポートが使用中と判定されてしまうのを防ぐためのもの
+                ## 自動リロードモードでの reloader process や Akebi は KonomiTV サーバーの子プロセスになるので、
+                ## プロセスの親プロセスの PID が一致するかもチェックする
+                try:
+                    process = psutil.Process(conn.pid)
+                    if ((process.pid == current_process.pid) or
+                        (process.pid == current_process.ppid()) or
+                        (process.ppid() == current_process.pid) or
+                        (process.ppid() == current_process.ppid())):
+                        continue
+                except Exception:
+                    pass
+                # 使用中のポートに追加
+                if conn.laddr is not None:
+                    used_ports.append(cast(Any, conn.laddr).port)
+        # リッスンポートと同じポートが使われていたら、エラーを表示する
+        # Akebi HTTPS Server のリッスンポートと Uvicorn のリッスンポートの両方をチェック
+        if port in used_ports:
+            raise ValueError(
+                f'ポート {port} は他のプロセスで使われているため、KonomiTV を起動できません。\n'
+                f'重複して KonomiTV を起動していないか、他のソフトでポート {port} を使っていないかを確認してください。'
+            )
+        if (port + 10) in used_ports:
+            raise ValueError(
+                f'ポート {port + 10} ({port} + 10) は他のプロセスで使われているため、KonomiTV を起動できません。\n'
+                f'重複して KonomiTV を起動していないか、他のソフトでポート {port + 10} を使っていないかを確認してください。'
+            )
+        return port
+
+class _ServerSettingsTV(BaseModel):
+    max_alive_time: PositiveInt = 10
+    debug_mode_ts_path: FilePath | None = None
+
+class _ServerSettingsVideo(BaseModel):
+    recorded_folders: list[DirectoryPath] = []
+    # BDライブラリの保存先フォルダ
+    bd_library_folders: list[DirectoryPath] = []
+
+class _ServerSettingsCapture(BaseModel):
+    upload_folders: list[DirectoryPath] = []
+
+class _ServerSettingsDiscord(BaseModel):
+    enabled: bool = False
+    token: str | None = None
+    channel_id: int | None = None
+    notify_server: bool = False
+    notify_recording: bool = False
+    maintenance_user_ids: list[str] = []
+
+    @field_validator('channel_id', mode='before')
+    @classmethod
+    def validate_channel_id(cls, v: Any) -> int | None:
+        """
+        channel_id の値を検証・変換する
+        文字列として受け取った場合は整数に変換する（フロントエンドからの送信時）
+        """
+        if v is None or v == '':
+            return None
+        if isinstance(v, str):
+            try:
+                return int(v)
+            except ValueError:
+                raise ValueError('channel_id must be a valid integer')
+        return v
+
+    @field_serializer('channel_id')
+    def serialize_channel_id(self, value: int | None) -> str | None:
+        """
+        channel_id を JSON レスポンス用に文字列として出力する
+        JavaScript の Number.MAX_SAFE_INTEGER を超える値でも精度を保つため
+        """
+        if value is None:
+            return None
+        return str(value)
+
+class _ServerSettingsTSReplaceEncoding(BaseModel):
+    """tsreplaceエンコード設定"""
+    auto_encoding_enabled: bool = False
+    auto_encoding_codec: Literal['h264', 'hevc'] = 'h264'
+    auto_encoding_encoder: Literal['software', 'hardware'] = 'software'
+    # ハードウェアエンコーダーの種類（NVIDIA、AMD、Intel）
+    hardware_encoder_type: Literal['nvidia', 'amd', 'intel'] = 'nvidia'
+    delete_original_after_encoding: bool = False
+    encoding_quality_preset: str = 'medium'
+    max_concurrent_encodings: PositiveInt = 1
+    hardware_encoder_available: bool = False
+    # 新しい設定フィールド
+    enabled: bool = True
+    # エンコード済みファイルの保存先フォルダ（未設定の場合は録画フォルダ内にEncodedフォルダを自動作成）
+    encoded_folder: str | None = None
+    # エンコード後に元ファイルを削除するかのデフォルト設定（False=元ファイルを維持）
+    delete_original_default: bool = False
+    max_concurrent_tasks: PositiveInt = 1
+    task_timeout_minutes: PositiveInt = 180
+    # TSReplace用エンコーダーオプション設定
+    # ソフトウェアエンコード (FFmpeg)
+    ffmpeg_h264_options: str = '-y -f mpegts -i - -copyts -start_at_zero -vf yadif -an -c:v libx264 -preset medium -crf 23 -g 90 -f mpegts -'
+    ffmpeg_hevc_options: str = '-y -f mpegts -i - -copyts -start_at_zero -vf yadif -an -c:v libx265 -preset medium -crf 23 -g 90 -f mpegts -'
+    # NVIDIA GPU用オプション (NVEncC)
+    nvidia_h264_options: str = '-i - --input-format mpegts --tff --vpp-deinterlace normal -c h264 --qvbr 23 --gop-len 90 --output-format mpegts -o -'
+    nvidia_hevc_options: str = '-i - --input-format mpegts --tff --vpp-deinterlace normal -c hevc --qvbr 23 --gop-len 90 --output-format mpegts -o -'
+    # AMD GPU用オプション (VCEEncC)
+    amd_h264_options: str = '-i - --input-format mpegts --tff --vpp-deinterlace normal -c h264 --qvbr 23 --gop-len 90 --output-format mpegts -o -'
+    amd_hevc_options: str = '-i - --input-format mpegts --tff --vpp-deinterlace normal -c hevc --qvbr 23 --gop-len 90 --output-format mpegts -o -'
+    # Intel GPU用オプション (QSVEncC)
+    intel_h264_options: str = '-i - --input-format mpegts --tff --vpp-deinterlace normal -c h264 --icq 23 --gop-len 90 --output-format mpegts -o -'
+    intel_hevc_options: str = '-i - --input-format mpegts --tff --vpp-deinterlace normal -c hevc --icq 23 --gop-len 90 --output-format mpegts -o -'
+
+    @field_validator('hardware_encoder_available', mode='after')
+    def validate_hardware_encoder_available(cls, hardware_encoder_available: bool, info: ValidationInfo) -> bool:
+        # バリデーションをスキップする場合はそのまま返す
+        if type(info.context) is dict and info.context.get('bypass_validation') is True:
+            return hardware_encoder_available
+
+        # ハードウェアエンコーダーの利用可否を自動検出
+        try:
+            # 循環参照を避けるために遅延インポート
+            from app.utils.TSReplaceEncodingUtil import TSReplaceEncodingUtil
+            detected_availability = TSReplaceEncodingUtil.detectHardwareEncoderAvailability()
+
+            # 検出結果をログに出力
+            from app import logging
+            if detected_availability:
+                logging.info('TSReplace Hardware Encoder: Available')
+            else:
+                logging.info('TSReplace Hardware Encoder: Not Available (Software encoding only)')
+
+            return detected_availability
+        except Exception as e:
+            # エラーが発生した場合は設定値をそのまま返す
+            from app import logging
+            logging.warning(f'TSReplace Hardware Encoder detection failed: {e}')
+            return hardware_encoder_available
+
+    @field_validator('auto_encoding_codec')
+    def validate_auto_encoding_codec(cls, codec: str, info: ValidationInfo) -> str:
+        # バリデーションをスキップする場合はそのまま返す
+        if type(info.context) is dict and info.context.get('bypass_validation') is True:
+            return codec
+
+        # 利用可能なコーデックかチェック
+        try:
+            from app.utils.TSReplaceEncodingUtil import TSReplaceEncodingUtil
+            available_codecs = TSReplaceEncodingUtil.getAvailableCodecs()
+            if codec not in available_codecs:
+                raise ValueError(
+                    f'コーデック {codec.upper()} は利用できません。\n'
+                    f'利用可能なコーデック: {", ".join([c.upper() for c in available_codecs])}'
+                )
+        except (ImportError, Exception):
+            # TSReplaceEncodingUtilが利用できない場合や初期化エラーの場合はスキップ
+            pass
+
+        return codec
+
+    @field_validator('auto_encoding_encoder')
+    def validate_auto_encoding_encoder(cls, encoder_type: str, info: ValidationInfo) -> str:
+        # バリデーションをスキップする場合はそのまま返す
+        if type(info.context) is dict and info.context.get('bypass_validation') is True:
+            return encoder_type
+
+        # ハードウェアエンコーダーが指定されているが利用できない場合の警告
+        if encoder_type == 'hardware':
+            try:
+                from app.utils.TSReplaceEncodingUtil import TSReplaceEncodingUtil
+                if not TSReplaceEncodingUtil.detectHardwareEncoderAvailability():
+                    from app import logging
+                    logging.warning(
+                        'TSReplace: ハードウェアエンコーダーが指定されていますが利用できません。'
+                        'ソフトウェアエンコードにフォールバックします。'
+                    )
+            except (ImportError, Exception):
+                # TSReplaceEncodingUtilが利用できない場合や初期化エラーの場合はスキップ
+                pass
+
+        return encoder_type
+
+class ServerSettings(BaseModel):
+    general: _ServerSettingsGeneral = _ServerSettingsGeneral()
+    server: _ServerSettingsServer = _ServerSettingsServer()
+    tv: _ServerSettingsTV = _ServerSettingsTV()
+    video: _ServerSettingsVideo = _ServerSettingsVideo()
+    capture: _ServerSettingsCapture = _ServerSettingsCapture()
+    discord: _ServerSettingsDiscord = _ServerSettingsDiscord()
+    tsreplace_encoding: _ServerSettingsTSReplaceEncoding = _ServerSettingsTSReplaceEncoding()
+
+
+# サーバー設定データと読み込み・保存用の関数
+# _CONFIG には config.yaml から読み込んだ KonomiTV サーバーの設定データが保持される
+# _CONFIG には直接アクセスせず、Config() 関数を通してアクセスする
+
+_CONFIG: ServerSettings | None = None
+_CONFIG_YAML_PATH = BASE_DIR.parent / 'config.yaml'
+_DOCKER_PATH_PREFIX = '/host-rootfs'
+
+
+def LoadConfig(bypass_validation: bool = False) -> ServerSettings:
+    """
+    config.yaml からサーバー設定データのロードとバリデーションを行い、グローバル変数に格納する
+    基本 KonomiTV サーバー起動時に一度だけ呼び出されるが、自動リロードモードやマルチプロセス実行時にも呼び出される
+    いずれの場合でも、1プロセス内で複数回呼び出されることはない
+
+    Args:
+        bypass_validation (bool): バリデーションをスキップするかどうか
+
+    Raises:
+        SystemExit: 設定ファイルが配置されていなかったり、設定内容が不正な場合はサーバーを起動できないため、プロセスを終了する
+
+    Returns:
+        ServerSettings: 読み込んだサーバー設定データ
+    """
+
+    global _CONFIG, _CONFIG_YAML_PATH, _DOCKER_PATH_PREFIX
+    assert _CONFIG is None, 'LoadConfig() has already been called.'
+
+    # 循環参照を避けるために遅延インポート
+    from app import logging
+    from app.utils import GetPlatformEnvironment
+
+    # 設定ファイルが配置されていない場合、エラーを表示して終了する
+    if Path.exists(_CONFIG_YAML_PATH) is False:
+        logging.error('設定ファイルが配置されていないため、KonomiTV を起動できません。')
+        logging.error('config.example.yaml を config.yaml にコピーし、お使いの環境に合わせて編集してください。')
+        sys.exit(1)
+
+    # 設定ファイルからサーバー設定をロードする
+    try:
+        with open(_CONFIG_YAML_PATH, encoding='utf-8') as file:
+            config_raw = ruamel.yaml.YAML().load(file)
+            if config_raw is None:
+                logging.error('設定ファイルが空のため、KonomiTV を起動できません。')
+                logging.error('config.example.yaml を config.yaml にコピーし、お使いの環境に合わせて編集してください。')
+                sys.exit(1)
+        config_dict: dict[str, dict[str, Any]] = dict(config_raw)
+    except Exception as error:
+        logging.error('設定ファイルのロード中にエラーが発生したため、KonomiTV を起動できません。')
+        logging.error(f'{type(error).__name__}: {error}')
+        sys.exit(1)
+
+    try:
+        # Docker 上で実行されているとき、サーバー設定のうちパス指定の項目に Docker 環境向けの Prefix (/host-rootfs) を付ける
+        ## /host-rootfs (docker-compose.yaml で定義) を通してホストマシンのファイルシステムにアクセスできる
+        if GetPlatformEnvironment() == 'Linux-Docker':
+            config_dict['video']['recorded_folders'] = [_DOCKER_PATH_PREFIX + folder for folder in config_dict['video']['recorded_folders']]
+            config_dict['capture']['upload_folders'] = [_DOCKER_PATH_PREFIX + folder for folder in config_dict['capture']['upload_folders']]
+            if type(config_dict['tv']['debug_mode_ts_path']) is str:
+                config_dict['tv']['debug_mode_ts_path'] = _DOCKER_PATH_PREFIX + config_dict['tv']['debug_mode_ts_path']
+    except Exception:
+        pass  # config.yaml の記述が不正な場合は何もしない（どっちみち後のバリデーション処理で弾かれる）
+
+    # サーバー設定のバリデーションを実行
+    if bypass_validation is False:
+        try:
+            _CONFIG = ServerSettings.model_validate(config_dict, context={'bypass_validation': False})
+            logging.debug_simple('Server settings loaded.')
+        except ValidationError as error:
+
+            # エラーのうちどれか一つでもカスタムバリデーターからのエラーだった場合、エラーメッセージを表示して終了する
+            ## カスタムバリデーターからのエラーメッセージかどうかは ctx に error が含まれているかどうかで判定する
+            custom_error = False
+            for error_message in error.errors():
+                if 'ctx' in error_message and 'error' in error_message['ctx'] and type(error_message['ctx']['error']) is str:
+                    custom_error = True
+                    for message in error_message['ctx']['error'].split('\n'):
+                        logging.error(message)
+            if custom_error is True:
+                sys.exit(1)
+
+            # それ以外のバリデーションエラー
+            logging.error('設定内容が不正なため、KonomiTV を起動できません。')
+            logging.error('以下のエラーメッセージを参考に、config.yaml の記述が正しいかを確認してください。')
+            logging.error(error)
+            sys.exit(1)
+    else:
+        _CONFIG = ServerSettings.model_validate(config_dict, context={'bypass_validation': True})
+        # logging.debug_simple('Server settings loaded (bypassed validation).')
+
+    return _CONFIG
+
+
+def SaveConfig(config: ServerSettings) -> None:
+    """
+    変更されたサーバー設定データを、コメントやフォーマットを保持した形で config.yaml に書き込む
+    この関数は _CONFIG を更新しないため、設定変更を反映するにはサーバーを再起動する必要がある
+    (仮に _CONFIG を更新するよう実装しても、すでに Config() から取得した値を使って実行されている処理は更新できない)
+
+    Args:
+        config (ServerSettings): 変更されたサーバー設定データ
+    """
+
+    global _CONFIG_YAML_PATH, _DOCKER_PATH_PREFIX
+
+    # 循環参照を避けるために遅延インポート
+    from app.utils import GetPlatformEnvironment
+
+    # ServerSettings の Pydantic モデルを辞書に変換
+    config_dict = config.model_dump(mode='json')
+
+    # Docker 上で実行されているとき、サーバー設定のうちパス指定の項目に付与されている Docker 環境向けの Prefix (/host-rootfs) を外す
+    ## LoadConfig() で実行されている処理と逆の処理を行う
+    if GetPlatformEnvironment() == 'Linux-Docker':
+        config_dict['video']['recorded_folders'] = [str(folder).replace(_DOCKER_PATH_PREFIX, '') for folder in config_dict['video']['recorded_folders']]
+        config_dict['capture']['upload_folders'] = [str(folder).replace(_DOCKER_PATH_PREFIX, '') for folder in config_dict['capture']['upload_folders']]
+        if type(config_dict['tv']['debug_mode_ts_path']) is str or config_dict['tv']['debug_mode_ts_path'] is Path:
+            config_dict['tv']['debug_mode_ts_path'] = str(config_dict['tv']['debug_mode_ts_path']).replace(_DOCKER_PATH_PREFIX, '')
+
+    # config.yaml の内容をロード
+    yaml = ruamel.yaml.YAML()
+    yaml.default_flow_style = None  # None を使うと、スカラー以外のものはブロックスタイルになる
+    yaml.preserve_quotes = True
+    yaml.width = 20
+    yaml.indent(mapping=4, sequence=4, offset=4)
+    try:
+        with open(_CONFIG_YAML_PATH, encoding='utf-8') as file:
+            config_raw = yaml.load(file)
+    except Exception as error:
+        # 回復不可能
+        raise RuntimeError(f'Failed to load config.yaml: {error}')
+
+    # config.yaml の内容を更新して保存
+    # コメントやフォーマットを保持して保存するために更新方法を工夫している
+    for key in config_dict:
+        for sub_key in config_dict[key]:
+            # 文字列のリストを更新する場合は clear() と extend() を使う
+            if type(config_dict[key][sub_key]) is list:
+                if type(config_raw[key][sub_key]) is ruamel.yaml.CommentedSeq:
+                    config_raw[key][sub_key].clear()
+                    for item in config_dict[key][sub_key]:
+                        config_raw[key][sub_key].append(ruamel.yaml.scalarstring.SingleQuotedScalarString(item))
+                else:
+                    config_raw[key][sub_key] = ruamel.yaml.CommentedSeq(config_dict[key][sub_key])
+            # 文字列は明示的に SingleQuotedScalarString に変換する
+            elif type(config_dict[key][sub_key]) is str:
+                config_raw[key][sub_key] = ruamel.yaml.scalarstring.SingleQuotedScalarString(config_dict[key][sub_key])
+            else:
+                config_raw[key][sub_key] = config_dict[key][sub_key]
+
+    # None を null として出力するようにする
+    yaml.Representer.add_representer(type(None), lambda self, data: self.represent_scalar('tag:yaml.org,2002:null', 'null'))  # type: ignore
+
+    # 配列の末尾の "']" を "',\n    ]" に変換する transform 関数を定義
+    # 基本的に recorded_folders 用 (ruamel.yaml がフロースタイルの改行などを保持できないための苦肉の策)
+    def transform(value: str) -> str:
+        return value.replace("']", "',\n    ]")
+
+    with open(_CONFIG_YAML_PATH, mode='w', encoding='utf-8') as file:
+        yaml.dump(config_raw, file, transform=transform)
+
+
+def Config() -> ServerSettings:
+    """
+    LoadConfig() でグローバル変数に格納したサーバー設定データを取得する
+    この関数は、LoadConfig() を実行した後に呼び出さなければならない
+
+    Returns:
+        ServerSettings: サーバー設定データ
+    """
+
+    global _CONFIG
+    assert _CONFIG is not None, 'Server settings have not been initialized.'
+    return _CONFIG
+
+
+def GetServerPort() -> int:
+    """
+    サーバーのポート番号を返す (KonomiTV-Service.py でポート番号を取得するために使用)
+    KonomiTV-Service.py ではバリデーションは行いたくないので、Pydantic には通さずに config.yaml から直接ロードする
+
+    Returns:
+        int: サーバーのポート番号
+    """
+
+    try:
+
+        # 設定ファイルからサーバー設定をロードし、ポート番号だけを返す
+        with open(_CONFIG_YAML_PATH, encoding='utf-8') as file:
+            config_dict: dict[str, dict[str, Any]] = dict(ruamel.yaml.YAML().load(file))
+        return config_dict['server']['port']
+
+    # 処理中にエラーが発生した (config.yaml が存在しない・フォーマットが不正など) 場合は、デフォルトのポート番号を返す
+    except Exception:
+        return 7000
