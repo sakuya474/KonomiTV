@@ -141,7 +141,7 @@ def main(
     
     # TSReplace のダウンロード URL を決定
     # まず最新リリースの情報を取得
-    tsreplace_releases_url = 'https://api.github.com/repos/tsukumijima/TSReplace/releases/latest'
+    tsreplace_releases_url = 'https://api.github.com/repos/rigaya/tsreplace/releases/latest'
     tsreplace_releases_response = requests.get(tsreplace_releases_url)
     if tsreplace_releases_response.status_code != 200:
         print(Padding('Failed to get TSReplace release info, skipping...', (1, 2, 0, 2)))
