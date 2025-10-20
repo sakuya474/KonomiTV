@@ -65,7 +65,7 @@ def main(
 
     # サードパーティーライブラリを随時ダウンロードし、進捗を表示
     # ref: https://github.com/Textualize/rich/blob/master/examples/downloader.py
-    print(Padding('Downloading thirdparty libraries...', (1, 2, 0, 2)))
+    print(Padding('サードパーティーライブラリをダウンロードしています…', (1, 2, 0, 2)))
     progress = Progress(
         TextColumn(' '),
         BarColumn(bar_width=9999),
@@ -102,7 +102,7 @@ def main(
     thirdparty_compressed_file.close()  # 解凍する前に close() してすべて書き込ませておくのが重要
 
     # サードパーティーライブラリを解凍して展開
-    print(Padding('Updating thirdparty libraries... (takes a few seconds to minutes)', (1, 2, 0, 2)))
+    print(Padding('サードパーティーライブラリを更新しています… (数秒～数十秒かかります)', (1, 2, 0, 2)))
     progress = Progress(
         TextColumn(' '),
         BarColumn(bar_width=9999),
@@ -136,8 +136,7 @@ def main(
         if Path(INSTALLED_DIR / 'thirdparty/.gitkeep').exists() is False:
             Path(INSTALLED_DIR / 'thirdparty/.gitkeep').touch()
 
-
-    print(Padding('Thirdparty libraries updated successfully.', (1, 2, 1, 2)))
+    print(Padding('サードパーティーライブラリを更新しました。', (1, 2, 1, 2)))
 
     def GetEncoderVersion(encoder_name: str) -> None:
         # エンコーダーのバージョン情報を取得する
