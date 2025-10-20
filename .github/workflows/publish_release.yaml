@@ -30,6 +30,9 @@ jobs:
     needs:
       - build_installer
       - build_thirdparty
+    permissions:
+      contents: write
+      actions: read
     steps:
 
       # ビルド済みのインストーラーとサードパーティーライブラリをダウンロード
