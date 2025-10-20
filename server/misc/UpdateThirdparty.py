@@ -140,13 +140,39 @@ def main(
     print(Padding('Downloading TSReplace...', (1, 2, 0, 2)))
     
     # TSReplace のダウンロード URL を決定
-    tsreplace_url = 'https://github.com/tsukumijima/TSReplace/releases/latest/download/'
+    # まず最新リリースの情報を取得
+    tsreplace_releases_url = 'https://api.github.com/repos/tsukumijima/TSReplace/releases/latest'
+    tsreplace_releases_response = requests.get(tsreplace_releases_url)
+    if tsreplace_releases_response.status_code != 200:
+        print(Padding('Failed to get TSReplace release info, skipping...', (1, 2, 0, 2)))
+        return
+    
+    tsreplace_releases_data = tsreplace_releases_response.json()
+    tsreplace_assets = tsreplace_releases_data.get('assets', [])
+    
+    # プラットフォームに応じたアセットを選択
+    tsreplace_asset = None
     if platform_type == 'Windows':
-        tsreplace_url += 'TSReplace-windows-x64.zip'
+        for asset in tsreplace_assets:
+            if 'windows' in asset['name'].lower() and 'x64' in asset['name'].lower():
+                tsreplace_asset = asset
+                break
     elif platform_type == 'Linux' and is_arm_device is False:
-        tsreplace_url += 'TSReplace-linux-x64.tar.xz'
+        for asset in tsreplace_assets:
+            if 'linux' in asset['name'].lower() and 'x64' in asset['name'].lower():
+                tsreplace_asset = asset
+                break
     elif platform_type == 'Linux' and is_arm_device is True:
-        tsreplace_url += 'TSReplace-linux-arm64.tar.xz'
+        for asset in tsreplace_assets:
+            if 'linux' in asset['name'].lower() and 'arm64' in asset['name'].lower():
+                tsreplace_asset = asset
+                break
+    
+    if not tsreplace_asset:
+        print(Padding('No suitable TSReplace asset found, skipping...', (1, 2, 0, 2)))
+        return
+    
+    tsreplace_url = tsreplace_asset['browser_download_url']
     
     # TSReplace をダウンロード
     tsreplace_response = requests.get(tsreplace_url, stream=True)
