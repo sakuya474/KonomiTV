@@ -136,6 +136,50 @@ def main(
         if Path(INSTALLED_DIR / 'thirdparty/.gitkeep').exists() is False:
             Path(INSTALLED_DIR / 'thirdparty/.gitkeep').touch()
 
+    # TSReplace をダウンロードして展開
+    print(Padding('Downloading TSReplace...', (1, 2, 0, 2)))
+    
+    # TSReplace のダウンロード URL を決定
+    tsreplace_url = 'https://github.com/tsukumijima/TSReplace/releases/latest/download/'
+    if platform_type == 'Windows':
+        tsreplace_url += 'TSReplace-windows-x64.zip'
+    elif platform_type == 'Linux' and is_arm_device is False:
+        tsreplace_url += 'TSReplace-linux-x64.tar.xz'
+    elif platform_type == 'Linux' and is_arm_device is True:
+        tsreplace_url += 'TSReplace-linux-arm64.tar.xz'
+    
+    # TSReplace をダウンロード
+    tsreplace_response = requests.get(tsreplace_url, stream=True)
+    if tsreplace_response.headers.get('Content-length') is not None:
+        task_id = progress.add_task('', total=float(tsreplace_response.headers['Content-length']))
+    else:
+        task_id = progress.add_task('', total=None)
+    
+    # ダウンロードしたデータを随時一時ファイルに書き込む
+    tsreplace_compressed_file = tempfile.NamedTemporaryFile(mode='wb', delete=False)
+    with progress:
+        for chunk in tsreplace_response.iter_content(chunk_size=1048576):
+            tsreplace_compressed_file.write(chunk)
+            progress.update(task_id, advance=len(chunk))
+    tsreplace_compressed_file.close()
+    
+    # TSReplace を解凍して展開
+    print(Padding('Extracting TSReplace...', (1, 2, 0, 2)))
+    tsreplace_compressed_file_path = tsreplace_compressed_file.name
+    tsreplace_dir = INSTALLED_DIR / 'thirdparty' / 'tsreplace'
+    tsreplace_dir.mkdir(parents=True, exist_ok=True)
+    
+    if platform_type == 'Windows':
+        # Windows: ZIP 形式のアーカイブを解凍
+        with zipfile.ZipFile(tsreplace_compressed_file_path, mode='r') as zip_file:
+            zip_file.extractall(tsreplace_dir)
+    elif platform_type == 'Linux':
+        # Linux: tar.xz 形式のアーカイブを解凍
+        with tarfile.open(tsreplace_compressed_file_path, mode='r:xz') as tar_xz:
+            tar_xz.extractall(tsreplace_dir)
+    
+    Path(tsreplace_compressed_file_path).unlink()
+
     print(Padding('Thirdparty libraries updated successfully.', (1, 2, 1, 2)))
 
     def GetEncoderVersion(encoder_name: str) -> None:
