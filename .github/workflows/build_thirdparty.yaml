@@ -46,7 +46,7 @@ jobs:
       - name: Archive Thirdparty Libraries
         run: |
           cd server/thirdparty
-          if (Get-ChildItem -Force | Measure-Object).Count -gt 0 {
+          if ((Get-ChildItem -Force | Measure-Object).Count -gt 0) {
             7z a -t7z -mx=9 ../thirdparty-windows.7z *
           } else {
             echo "No files to archive, creating empty archive"
