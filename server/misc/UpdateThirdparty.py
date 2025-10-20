@@ -138,7 +138,7 @@ def main(
 
     # TSReplace をダウンロードして展開
     print(Padding('Downloading TSReplace...', (1, 2, 0, 2)))
-    
+
     # TSReplace のダウンロード URL を決定
     # まず最新リリースの情報を取得
     tsreplace_releases_url = 'https://api.github.com/repos/rigaya/tsreplace/releases/latest'
@@ -146,10 +146,10 @@ def main(
     if tsreplace_releases_response.status_code != 200:
         print(Padding('Failed to get TSReplace release info, skipping...', (1, 2, 0, 2)))
         return
-    
+
     tsreplace_releases_data = tsreplace_releases_response.json()
     tsreplace_assets = tsreplace_releases_data.get('assets', [])
-    
+
     # プラットフォームに応じたアセットを選択
     tsreplace_asset = None
     if platform_type == 'Windows':
@@ -167,20 +167,20 @@ def main(
             if 'linux' in asset['name'].lower() and 'arm64' in asset['name'].lower():
                 tsreplace_asset = asset
                 break
-    
+
     if not tsreplace_asset:
         print(Padding('No suitable TSReplace asset found, skipping...', (1, 2, 0, 2)))
         return
-    
+
     tsreplace_url = tsreplace_asset['browser_download_url']
-    
+
     # TSReplace をダウンロード
     tsreplace_response = requests.get(tsreplace_url, stream=True)
     if tsreplace_response.headers.get('Content-length') is not None:
         task_id = progress.add_task('', total=float(tsreplace_response.headers['Content-length']))
     else:
         task_id = progress.add_task('', total=None)
-    
+
     # ダウンロードしたデータを随時一時ファイルに書き込む
     tsreplace_compressed_file = tempfile.NamedTemporaryFile(mode='wb', delete=False)
     with progress:
@@ -188,13 +188,13 @@ def main(
             tsreplace_compressed_file.write(chunk)
             progress.update(task_id, advance=len(chunk))
     tsreplace_compressed_file.close()
-    
+
     # TSReplace を解凍して展開
     print(Padding('Extracting TSReplace...', (1, 2, 0, 2)))
     tsreplace_compressed_file_path = tsreplace_compressed_file.name
     tsreplace_dir = INSTALLED_DIR / 'thirdparty' / 'tsreplace'
     tsreplace_dir.mkdir(parents=True, exist_ok=True)
-    
+
     if platform_type == 'Windows':
         # Windows: ZIP 形式のアーカイブを解凍
         with zipfile.ZipFile(tsreplace_compressed_file_path, mode='r') as zip_file:
@@ -203,7 +203,7 @@ def main(
         # Linux: tar.xz 形式のアーカイブを解凍
         with tarfile.open(tsreplace_compressed_file_path, mode='r:xz') as tar_xz:
             tar_xz.extractall(tsreplace_dir)
-    
+
     Path(tsreplace_compressed_file_path).unlink()
 
     print(Padding('Thirdparty libraries updated successfully.', (1, 2, 1, 2)))
