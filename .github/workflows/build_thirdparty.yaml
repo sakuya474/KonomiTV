@@ -29,8 +29,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'poetry'
-          cache-dependency-path: '${{ github.workspace }}/server/poetry.lock'
 
       # サーバーの依存関係をインストール
       - name: Install Dependencies
@@ -83,8 +81,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'poetry'
-          cache-dependency-path: '${{ github.workspace }}/server/poetry.lock'
 
       # サーバーの依存関係をインストール
       - name: Install Dependencies
