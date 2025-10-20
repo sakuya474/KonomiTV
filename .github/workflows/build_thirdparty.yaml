@@ -46,7 +46,12 @@ jobs:
       - name: Archive Thirdparty Libraries
         run: |
           cd server/thirdparty
-          7z a -t7z -mx=9 ../thirdparty-windows.7z *
+          if (Get-ChildItem -Force | Measure-Object).Count -gt 0 {
+            7z a -t7z -mx=9 ../thirdparty-windows.7z *
+          } else {
+            echo "No files to archive, creating empty archive"
+            7z a -t7z -mx=9 ../thirdparty-windows.7z -si
+          }
 
       # アーカイブされたサードパーティーライブラリを Artifact としてアップロード
       - name: Upload Thirdparty Libraries as Artifact
@@ -98,7 +103,12 @@ jobs:
       - name: Archive Thirdparty Libraries
         run: |
           cd server/thirdparty
-          tar -cJf ../thirdparty-linux${{ matrix.artifact_suffix }}.tar.xz *
+          if [ "$(ls -A .)" ]; then
+            tar -cJf ../thirdparty-linux${{ matrix.artifact_suffix }}.tar.xz *
+          else
+            echo "No files to archive, creating empty archive"
+            tar -cJf ../thirdparty-linux${{ matrix.artifact_suffix }}.tar.xz --files-from /dev/null
+          fi
 
       # アーカイブされたサードパーティーライブラリを Artifact としてアップロード
       - name: Upload Thirdparty Libraries as Artifact
