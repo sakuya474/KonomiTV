@@ -39,18 +39,11 @@ jobs:
 
       # サードパーティーライブラリをダウンロード（一時的にtsukumijimaから）
       - name: Download Thirdparty Libraries
-        working-directory: server/
         run: |
           # 一時的にtsukumijimaからダウンロード
-          python -c "
-          import sys
-          sys.path.append('.')
-          from misc.UpdateThirdparty import main
-          import os
-          # 一時的にURLを変更
-          os.environ['THIRDPARTY_BASE_URL'] = 'https://nightly.link/tsukumijima/KonomiTV/workflows/build_thirdparty.yaml/master/'
-          main('latest')
-          "
+          curl -L -o thirdparty-windows.7z.zip "https://nightly.link/tsukumijima/KonomiTV/workflows/build_thirdparty.yaml/master/thirdparty-windows.7z.zip"
+          unzip thirdparty-windows.7z.zip
+          mv thirdparty-windows.7z server/thirdparty-windows.7z
 
       # ビルドされたサードパーティーライブラリをアーカイブ
       - name: Archive Thirdparty Libraries
@@ -107,18 +100,17 @@ jobs:
 
       # サードパーティーライブラリをダウンロード（一時的にtsukumijimaから）
       - name: Download Thirdparty Libraries
-        working-directory: server/
         run: |
           # 一時的にtsukumijimaからダウンロード
-          python -c "
-          import sys
-          sys.path.append('.')
-          from misc.UpdateThirdparty import main
-          import os
-          # 一時的にURLを変更
-          os.environ['THIRDPARTY_BASE_URL'] = 'https://nightly.link/tsukumijima/KonomiTV/workflows/build_thirdparty.yaml/master/'
-          main('latest')
-          "
+          if [ "${{ matrix.arch }}" == "arm64" ]; then
+            curl -L -o thirdparty-linux-arm.tar.xz.zip "https://nightly.link/tsukumijima/KonomiTV/workflows/build_thirdparty.yaml/master/thirdparty-linux-arm.tar.xz.zip"
+            unzip thirdparty-linux-arm.tar.xz.zip
+            tar -xf thirdparty-linux-arm.tar.xz -C server/thirdparty/
+          else
+            curl -L -o thirdparty-linux.tar.xz.zip "https://nightly.link/tsukumijima/KonomiTV/workflows/build_thirdparty.yaml/master/thirdparty-linux.tar.xz.zip"
+            unzip thirdparty-linux.tar.xz.zip
+            tar -xf thirdparty-linux.tar.xz -C server/thirdparty/
+          fi
 
       # ビルドされたサードパーティーライブラリをアーカイブ
       - name: Archive Thirdparty Libraries
