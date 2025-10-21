@@ -518,13 +518,15 @@ def Installer(version: str, install_fork: bool) -> None:
         # フォーク版の場合は sakuya474/KonomiTV から、それ以外は tsukumijima/KonomiTV からダウンロード
         if install_fork is True:
             git_url = 'https://github.com/sakuya474/KonomiTV.git'
+            branch = 'release'  # フォーク版はreleaseブランチから
         else:
             git_url = 'https://github.com/tsukumijima/KonomiTV.git'
+            branch = 'master'  # 本家はmasterブランチから
         
         result = RunSubprocess(
             'KonomiTV のソースコードを Git でダウンロードしています…',
-            #masterブランチからダウンロード
-            ['git', 'clone', '-b', 'master', git_url, install_path.name],
+            #releaseブランチまたはmasterブランチからダウンロード
+            ['git', 'clone', '-b', branch, git_url, install_path.name],
             cwd = install_path.parent,
             error_message = 'KonomiTV のソースコードのダウンロード中に予期しないエラーが発生しました。',
             error_log_name = 'Git のエラーログ',
@@ -542,10 +544,10 @@ def Installer(version: str, install_fork: bool) -> None:
 
         # GitHub からソースコードをダウンロード
         # フォーク版の場合は sakuya474/KonomiTV から、それ以外は tsukumijima/KonomiTV からダウンロード
-        ## latest の場合は master ブランチを、それ以外は指定されたバージョンのタグをダウンロード
+        ## latest の場合は release/master ブランチを、それ以外は指定されたバージョンのタグをダウンロード
         if install_fork is True:
             if version == 'latest':
-                source_code_response = requests.get('https://codeload.github.com/sakuya474/KonomiTV/zip/refs/heads/master')
+                source_code_response = requests.get('https://codeload.github.com/sakuya474/KonomiTV/zip/refs/heads/release')
             else:
                 source_code_response = requests.get(f'https://codeload.github.com/sakuya474/KonomiTV/zip/refs/tags/v{version}')
         else:
