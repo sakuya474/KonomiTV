@@ -40,7 +40,7 @@ jobs:
       # サードパーティーライブラリをビルド
       - name: Build Thirdparty Libraries
         working-directory: server/
-        run: poetry run task update-thirdparty latest
+        run: poetry run task update-thirdparty 0.1.0
 
       # ビルドされたサードパーティーライブラリをアーカイブ
       - name: Archive Thirdparty Libraries
@@ -98,7 +98,7 @@ jobs:
       # サードパーティーライブラリをビルド
       - name: Build Thirdparty Libraries
         working-directory: server/
-        run: poetry run task update-thirdparty latest
+        run: poetry run task update-thirdparty 0.1.0
 
       # ビルドされたサードパーティーライブラリをアーカイブ
       - name: Archive Thirdparty Libraries
