@@ -35,7 +35,7 @@ jobs:
       actions: read
     steps:
 
-      # ビルド済みのインストーラーとサードパーティーライブラリをダウンロード
+      # インストーラーをダウンロード
       - name: Download Installer (for Windows)
         uses: actions/download-artifact@v4
         with:
@@ -86,14 +86,7 @@ jobs:
       # リリースコミットに対応する新バージョンのタグを release ブランチで作成
       - name: Create New Version Tag
         working-directory: KonomiTV
-        env:
-          GIT_AUTHOR_NAME: "GitHub Actions"
-          GIT_AUTHOR_EMAIL: "actions@github.com"
-          GIT_COMMITTER_NAME: "GitHub Actions"
-          GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
-          git branch -D release || true
-          git checkout -b release origin/release
           git tag v${{ steps.get_version.outputs.version }} release
           git push origin --tags
 
@@ -101,7 +94,23 @@ jobs:
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: 'KonomiTV-Installer.exe,KonomiTV-Installer.elf,KonomiTV-Installer-ARM.elf,thirdparty-windows.7z,thirdparty-linux.tar.xz,thirdparty-linux-arm.tar.xz'
-          generateReleaseNotes: true
-          name: KonomiTV (β) ${{ steps.get_version.outputs.version }}
           tag: v${{ steps.get_version.outputs.version }}
+          name: KonomiTV v${{ steps.get_version.outputs.version }}
+          body: |
+            ## インストーラー
+            - **Windows**: `KonomiTV-Installer.exe`
+            - **Linux (x64)**: `KonomiTV-Installer.elf`
+            - **Linux (ARM64)**: `KonomiTV-Installer-ARM.elf`
+
+            ## サードパーティーライブラリ
+            - **Windows**: `thirdparty-windows.7z`
+            - **Linux (x64)**: `thirdparty-linux.tar.xz`
+            - **Linux (ARM64)**: `thirdparty-linux-arm.tar.xz`
+          files: |
+            KonomiTV-Installer.exe
+            KonomiTV-Installer.elf
+            KonomiTV-Installer-ARM.elf
+            thirdparty-windows.7z
+            thirdparty-linux.tar.xz
+            thirdparty-linux-arm.tar.xz
+          token: ${{ secrets.GITHUB_TOKEN }}
