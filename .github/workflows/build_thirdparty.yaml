@@ -37,13 +37,10 @@ jobs:
           pip install poetry
           poetry install --no-root
 
-      # サードパーティーライブラリをダウンロード（一時的にtsukumijimaから）
-      - name: Download Thirdparty Libraries
-        run: |
-          # 一時的にtsukumijimaからダウンロード
-          curl -L -o thirdparty-windows.7z.zip "https://nightly.link/tsukumijima/KonomiTV/workflows/build_thirdparty.yaml/master/thirdparty-windows.7z.zip"
-          unzip thirdparty-windows.7z.zip
-          mv thirdparty-windows.7z server/thirdparty-windows.7z
+      # サードパーティーライブラリをビルド
+      - name: Build Thirdparty Libraries
+        working-directory: server/
+        run: poetry run task update-thirdparty latest
 
       # ビルドされたサードパーティーライブラリをアーカイブ
       - name: Archive Thirdparty Libraries
@@ -98,19 +95,10 @@ jobs:
           pip install poetry
           poetry install --no-root
 
-      # サードパーティーライブラリをダウンロード（一時的にtsukumijimaから）
-      - name: Download Thirdparty Libraries
-        run: |
-          # 一時的にtsukumijimaからダウンロード
-          if [ "${{ matrix.arch }}" == "arm64" ]; then
-            curl -L -o thirdparty-linux-arm.tar.xz.zip "https://nightly.link/tsukumijima/KonomiTV/workflows/build_thirdparty.yaml/master/thirdparty-linux-arm.tar.xz.zip"
-            unzip thirdparty-linux-arm.tar.xz.zip
-            tar -xf thirdparty-linux-arm.tar.xz -C server/thirdparty/
-          else
-            curl -L -o thirdparty-linux.tar.xz.zip "https://nightly.link/tsukumijima/KonomiTV/workflows/build_thirdparty.yaml/master/thirdparty-linux.tar.xz.zip"
-            unzip thirdparty-linux.tar.xz.zip
-            tar -xf thirdparty-linux.tar.xz -C server/thirdparty/
-          fi
+      # サードパーティーライブラリをビルド
+      - name: Build Thirdparty Libraries
+        working-directory: server/
+        run: poetry run task update-thirdparty latest
 
       # ビルドされたサードパーティーライブラリをアーカイブ
       - name: Archive Thirdparty Libraries

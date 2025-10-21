@@ -122,6 +122,13 @@ def main():
         '    安定動作は保証されておらずサポートもありませんので、ご了承の上ご利用ください。',
     ], padding=(1, 2, 1, 2))
 
+    # フォーク版と本家版の選択
+    table_fork = CreateTable()
+    table_fork.add_column('KonomiTV のバージョンを選択してください')
+    table_fork.add_row('フォーク版 (sakuya474/KonomiTV): カスタマイズ版で、BDライブラリ機能などが追加されています')
+    table_fork.add_row('本家版 (tsukumijima/KonomiTV): オリジナル版で、安定性を重視しています')
+    print(Padding(table_fork, (1, 2, 1, 2)))
+    
     install_type = CustomPrompt.ask('フォーク版をインストールしますか？(y/n)', default='y', choices=['y', 'n'])
 
     # 実行タイプ (インストール or アップデート or アンインストール)

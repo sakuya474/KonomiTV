@@ -506,6 +506,54 @@ def Installer(version: str, install_fork: bool) -> None:
             if discord_bot_token:
                 break
             print(Padding('[red]Discord Bot Token を入力してください。', (0, 2, 0, 2)))
+
+    # ***** BDライブラリの設定 *****
+    table_09 = CreateTable()
+    table_09.add_column('09. BDライブラリの設定')
+    table_09.add_row('BDライブラリの保存先フォルダを設定してください。')
+    table_09.add_row('BDライブラリは、Blu-ray Disc の映像データを保存するために使用されます。')
+    if platform_type == 'Windows':
+        table_09.add_row('入力例: E:\\BD-Library')
+    elif platform_type == 'Linux' or platform_type == 'Linux-Docker':
+        table_09.add_row('入力例: /mnt/hdd/BD-Library')
+    table_09.add_row('複数のフォルダを指定するには、パスを1つずつ入力してください。')
+    table_09.add_row('入力を終了する場合は、何も入力せずに Enter キーを押してください。')
+    print(Padding(table_09, (1, 2, 1, 2)))
+
+    # BDライブラリの保存フォルダのリスト
+    bd_library_folders: list[str] = []
+
+    # BDライブラリフォルダを1つずつ入力
+    while True:
+        # 入力プロンプト (バリデーションに失敗し続ける限り何度でも表示される)
+        bd_library_folder = CustomPrompt.ask('BDライブラリの保存先フォルダのパス')
+
+        # 何も入力されなかった場合は入力を終了
+        if bd_library_folder == '':
+            # 1つも入力されていない場合は再度入力を促す
+            if len(bd_library_folders) == 0:
+                print(Padding('[red]少なくとも1つのBDライブラリの保存先フォルダを指定してください。', (0, 2, 0, 2)))
+                continue
+            break
+
+        # 入力されたパスを Path オブジェクトに変換
+        bd_library_folder_path = Path(bd_library_folder)
+
+        # バリデーション
+        if bd_library_folder_path.is_absolute() is False:
+            print(Padding('[red]BDライブラリの保存先フォルダは絶対パスで入力してください。', (0, 2, 0, 2)))
+            continue
+        if bd_library_folder_path.exists() is False:
+            print(Padding('[red]指定されたBDライブラリの保存先フォルダが存在しません。', (0, 2, 0, 2)))
+            continue
+        if bd_library_folder_path.is_dir() is False:
+            print(Padding('[red]指定されたパスはフォルダではありません。', (0, 2, 0, 2)))
+            continue
+
+        # 現在指定されているフォルダの一覧を表示
+        bd_library_folders.append(str(bd_library_folder_path))
+        print(Padding(f'[green]現在指定されているBDライブラリの保存先フォルダ: {", ".join(bd_library_folders)}', (0, 2, 0, 2)))
+
     # ***** ソースコードのダウンロード *****
 
     # Git コマンドがインストールされているかどうか
@@ -635,6 +683,7 @@ def Installer(version: str, install_fork: bool) -> None:
         config_dict['video']['recorded_folders'] = recorded_folders
         config_dict['capture']['upload_folders'] = capture_upload_folders
         config_dict['discord']['token'] = discord_bot_token
+        config_dict['video']['bd_library_folders'] = bd_library_folders
 
         # サーバー設定データを保存
         SaveConfig(install_path / 'config.yaml', config_dict)
