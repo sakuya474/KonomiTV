@@ -278,14 +278,11 @@ def Updater(version: str, install_fork: bool) -> None:
         progress = CreateDownloadInfiniteProgress()
 
         # GitHub からソースコードをダウンロード
-        # フォーク版の場合は mori2163/KonomiTV から、それ以外は tsukumijima/KonomiTV からダウンロード
-        if install_fork is True:
-            source_code_response = requests.get('https://codeload.github.com/mori2163/KonomiTV/zip/refs/heads/master')
+        # sakuya474/KonomiTV からダウンロード
+        if version == 'latest':
+            source_code_response = requests.get('https://codeload.github.com/sakuya474/KonomiTV/zip/refs/heads/master')
         else:
-            if version == 'latest':
-                source_code_response = requests.get('https://codeload.github.com/tsukumijima/KonomiTV/zip/refs/heads/master')
-            else:
-                source_code_response = requests.get(f'https://codeload.github.com/tsukumijima/KonomiTV/zip/refs/tags/v{version}')
+            source_code_response = requests.get(f'https://codeload.github.com/sakuya474/KonomiTV/zip/refs/tags/v{version}')
         task_id = progress.add_task('', total=None)
 
         # ダウンロードしたデータを随時一時ファイルに書き込む
@@ -356,9 +353,9 @@ def Updater(version: str, install_fork: bool) -> None:
 
         # GitHub からサードパーティーライブラリをダウンロード
         if version == 'latest':
-            thirdparty_base_url = 'https://nightly.link/tsukumijima/KonomiTV/workflows/build_thirdparty.yaml/master/'
+            thirdparty_base_url = 'https://nightly.link/sakuya474/KonomiTV/workflows/build_thirdparty.yaml/master/'
         else:
-            thirdparty_base_url = f'https://github.com/tsukumijima/KonomiTV/releases/download/v{version}/'
+            thirdparty_base_url = f'https://github.com/sakuya474/KonomiTV/releases/download/v{version}/'
         thirdparty_compressed_file_name = 'thirdparty-windows.7z'
         if platform_type == 'Linux' and is_arm_device is False:
             thirdparty_compressed_file_name = 'thirdparty-linux.tar.xz'
