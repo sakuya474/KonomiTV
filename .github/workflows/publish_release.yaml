@@ -86,8 +86,13 @@ jobs:
       # リリースコミットに対応する新バージョンのタグを release ブランチで作成
       - name: Create New Version Tag
         working-directory: KonomiTV
+        env:
+          GIT_AUTHOR_NAME: "GitHub Actions"
+          GIT_AUTHOR_EMAIL: "actions@github.com"
+          GIT_COMMITTER_NAME: "GitHub Actions"
+          GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
-          git tag v${{ steps.get_version.outputs.version }} release
+          git tag v${{ steps.get_version.outputs.version }}
           git push origin --tags
 
       # リリースを作成
