@@ -99,23 +99,23 @@ jobs:
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           tag: v${{ steps.get_version.outputs.version }}
-          name: KonomiTV v${{ steps.get_version.outputs.version }}
+          name: Release v${{ steps.get_version.outputs.version }}
           body: |
-            ## インストーラー
-            - **Windows**: `KonomiTV-Installer.exe`
-            - **Linux (x64)**: `KonomiTV-Installer.elf`
-            - **Linux (ARM64)**: `KonomiTV-Installer-ARM.elf`
-
-            ## サードパーティーライブラリ
-            - **Windows**: `thirdparty-windows.7z`
-            - **Linux (x64)**: `thirdparty-linux.tar.xz`
-            - **Linux (ARM64)**: `thirdparty-linux-arm.tar.xz`
-          files: |
+            KonomiTV v${{ steps.get_version.outputs.version }} をリリースしました。
+            
+            **変更点:**
+            - BDライブラリ機能の追加
+            - インストーラーの改善
+            - その他バグ修正とパフォーマンス向上
+          artifacts: |
             KonomiTV-Installer.exe
             KonomiTV-Installer.elf
             KonomiTV-Installer-ARM.elf
             thirdparty-windows.7z
             thirdparty-linux.tar.xz
             thirdparty-linux-arm.tar.xz
-          token: ${{ secrets.GITHUB_TOKEN }}
+          allowUpdates: true
+          draft: false
+          prerelease: false
