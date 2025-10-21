@@ -15,7 +15,10 @@ import zipfile
 from pathlib import Path
 from typing import Literal
 
-import elevate
+try:
+    import elevate
+except ImportError:
+    elevate = None
 import py7zr
 import requests
 import typer
@@ -60,7 +63,7 @@ def main(
     is_arm_device = platform.machine() == 'aarch64'
 
     # Linux では elevate で root 権限に昇格 (KonomiTV サーバー自体が root 権限で動作しているため)
-    if platform_type == 'Linux':
+    if platform_type == 'Linux' and elevate is not None:
         elevate.elevate(graphical=False)
 
     # サードパーティーライブラリを随時ダウンロードし、進捗を表示
