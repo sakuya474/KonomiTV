@@ -103,7 +103,7 @@ jobs:
           name: Release v${{ steps.get_version.outputs.version }}
           body: |
             KonomiTV v${{ steps.get_version.outputs.version }} をリリースしました。
-            
+
             **変更点:**
             - BDライブラリ機能の追加
             - インストーラーの改善
