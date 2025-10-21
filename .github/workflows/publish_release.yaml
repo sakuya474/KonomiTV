@@ -83,11 +83,11 @@ jobs:
         run: |
           echo version=$(echo "$COMMIT_MESSAGE" | sed -e 's/Release: version //') >> $GITHUB_OUTPUT
 
-      # 既存のタグを削除（存在する場合）
+      # Delete existing tag if it exists
       - name: Delete Existing Tag
         working-directory: KonomiTV
         run: |
-          # 既存のタグを削除（存在する場合）
+          # Delete existing tag if it exists
           if git tag -l | grep -q "v${{ steps.get_version.outputs.version }}"; then
             echo "Tag v${{ steps.get_version.outputs.version }} already exists, deleting..."
             git tag -d v${{ steps.get_version.outputs.version }} || true
