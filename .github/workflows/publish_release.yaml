@@ -87,9 +87,9 @@ jobs:
       - name: Create New Version Tag
         working-directory: KonomiTV
         run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git switch release
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git checkout release
           git tag v${{ steps.get_version.outputs.version }} release
           git push origin --tags
 
