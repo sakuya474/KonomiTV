@@ -129,12 +129,12 @@ def main(
         if platform_type == 'Windows':
             # Windows: 7-Zip 形式のアーカイブを解凍
             with py7zr.SevenZipFile(thirdparty_compressed_file_path, mode='r') as seven_zip:
-                seven_zip.extractall(INSTALLED_DIR)
+                seven_zip.extractall(INSTALLED_DIR / 'thirdparty')
         elif platform_type == 'Linux':
             # Linux: tar.xz 形式のアーカイブを解凍
             ## 7-Zip だと (おそらく) ファイルパーミッションを保持したまま圧縮することができない？ため、あえて tar.xz を使っている
             with tarfile.open(thirdparty_compressed_file_path, mode='r:xz') as tar_xz:
-                tar_xz.extractall(INSTALLED_DIR)
+                tar_xz.extractall(INSTALLED_DIR / 'thirdparty')
         Path(thirdparty_compressed_file_path).unlink()
         if Path(INSTALLED_DIR / 'thirdparty/.gitkeep').exists() is False:
             Path(INSTALLED_DIR / 'thirdparty/.gitkeep').touch()
