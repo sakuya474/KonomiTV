@@ -515,10 +515,16 @@ def Installer(version: str, install_fork: bool) -> None:
     if is_git_installed is True:
 
         # git clone でソースコードをダウンロード
+        # フォーク版の場合は sakuya474/KonomiTV から、それ以外は tsukumijima/KonomiTV からダウンロード
+        if install_fork is True:
+            git_url = 'https://github.com/sakuya474/KonomiTV.git'
+        else:
+            git_url = 'https://github.com/tsukumijima/KonomiTV.git'
+        
         result = RunSubprocess(
             'KonomiTV のソースコードを Git でダウンロードしています…',
             #masterブランチからダウンロード
-            ['git', 'clone', '-b', 'master', 'https://github.com/sakuya474/KonomiTV.git', install_path.name],
+            ['git', 'clone', '-b', 'master', git_url, install_path.name],
             cwd = install_path.parent,
             error_message = 'KonomiTV のソースコードのダウンロード中に予期しないエラーが発生しました。',
             error_log_name = 'Git のエラーログ',
@@ -535,12 +541,18 @@ def Installer(version: str, install_fork: bool) -> None:
         progress = CreateDownloadInfiniteProgress()
 
         # GitHub からソースコードをダウンロード
-        # sakuya474/KonomiTV からダウンロード
+        # フォーク版の場合は sakuya474/KonomiTV から、それ以外は tsukumijima/KonomiTV からダウンロード
         ## latest の場合は master ブランチを、それ以外は指定されたバージョンのタグをダウンロード
-        if version == 'latest':
-            source_code_response = requests.get('https://codeload.github.com/sakuya474/KonomiTV/zip/refs/heads/master')
+        if install_fork is True:
+            if version == 'latest':
+                source_code_response = requests.get('https://codeload.github.com/sakuya474/KonomiTV/zip/refs/heads/master')
+            else:
+                source_code_response = requests.get(f'https://codeload.github.com/sakuya474/KonomiTV/zip/refs/tags/v{version}')
         else:
-            source_code_response = requests.get(f'https://codeload.github.com/sakuya474/KonomiTV/zip/refs/tags/v{version}')
+            if version == 'latest':
+                source_code_response = requests.get('https://codeload.github.com/tsukumijima/KonomiTV/zip/refs/heads/master')
+            else:
+                source_code_response = requests.get(f'https://codeload.github.com/tsukumijima/KonomiTV/zip/refs/tags/v{version}')
         task_id = progress.add_task('', total=None)
 
         # ダウンロードしたデータを随時一時ファイルに書き込む
