@@ -773,6 +773,20 @@ def Installer(version: str, install_fork: bool) -> None:
         elif platform_type == 'Linux':
             python_executable_path = install_path / 'server/thirdparty/Python/bin/python'
 
+        # Python の実行ファイルが存在するか確認
+        if python_executable_path.exists() is False:
+            print(Padding('', (1, 2, 0, 2)))
+            print(Padding('[red]Python の実行ファイルが見つかりませんでした。[/red]', (0, 2, 0, 2)))
+            print(Padding(f'[yellow]Expected path: {python_executable_path}[/yellow]', (0, 2, 0, 2)))
+            print(Padding('[yellow]サードパーティーライブラリが正しく展開されていない可能性があります。[/yellow]', (0, 2, 1, 2)))
+            # thirdparty ディレクトリの内容を表示
+            thirdparty_dir = install_path / 'server/thirdparty'
+            if thirdparty_dir.exists():
+                print(Padding(f'Contents of {thirdparty_dir}:', (0, 2, 0, 2)))
+                for item in thirdparty_dir.iterdir():
+                    print(Padding(f'  - {item.name}', (0, 2, 0, 2)))
+            return
+
         # poetry env use を実行
         result = RunSubprocessDirectLogOutput(
             'Python の仮想環境を作成しています…',
