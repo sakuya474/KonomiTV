@@ -11,7 +11,7 @@ from pydantic import BaseModel, PositiveInt
 
 
 # バージョン
-VERSION = '0.2.3'
+VERSION = '0.1.0'
 
 # ベースディレクトリ
 BASE_DIR = Path(__file__).resolve().parent.parent
