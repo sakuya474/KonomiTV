@@ -603,6 +603,15 @@ def Installer(version: str, install_fork: bool) -> None:
                 source_code_response = requests.get('https://codeload.github.com/tsukumijima/KonomiTV/zip/refs/heads/master')
             else:
                 source_code_response = requests.get(f'https://codeload.github.com/tsukumijima/KonomiTV/zip/refs/tags/v{version}')
+        
+        # ダウンロードが成功したかチェック
+        if source_code_response.status_code != 200:
+            print(Padding('', (1, 2, 0, 2)))
+            print(Padding('[red]KonomiTV のソースコードのダウンロードに失敗しました。[/red]', (0, 2, 0, 2)))
+            print(Padding(f'[yellow]HTTP Status Code: {source_code_response.status_code}[/yellow]', (0, 2, 0, 2)))
+            print(Padding('[yellow]指定されたバージョンが存在しないか、ネットワークエラーが発生した可能性があります。[/yellow]', (0, 2, 1, 2)))
+            return
+        
         task_id = progress.add_task('', total=None)
 
         # ダウンロードしたデータを随時一時ファイルに書き込む
