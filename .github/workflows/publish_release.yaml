@@ -92,6 +92,10 @@ jobs:
           GIT_COMMITTER_NAME: "GitHub Actions"
           GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
+          # 既存のタグを削除（存在する場合）
+          git tag -d v${{ steps.get_version.outputs.version }} || true
+          git push origin --delete v${{ steps.get_version.outputs.version }} || true
+          # 新しいタグを作成
           git tag v${{ steps.get_version.outputs.version }}
           git push origin --tags
 
