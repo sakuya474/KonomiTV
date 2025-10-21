@@ -55,7 +55,10 @@ def main(
     if download_version == 'latest':
         THIRDPARTY_BASE_URL = 'https://nightly.link/tsukumijima/KonomiTV/workflows/build_thirdparty.yaml/master/'
     else:
-        THIRDPARTY_BASE_URL = f'https://github.com/tsukumijima/KonomiTV/releases/download/v{download_version}/'
+        # フォークされたリポジトリでも動作するように、現在のリポジトリからダウンロード
+        import os
+        github_repository = os.environ.get('GITHUB_REPOSITORY', 'tsukumijima/KonomiTV')
+        THIRDPARTY_BASE_URL = f'https://github.com/{github_repository}/releases/download/v{download_version}/'
 
     # ***** 以下はアップデーターのサードパーティーライブラリの更新処理をベースに実装したもの *****
 
