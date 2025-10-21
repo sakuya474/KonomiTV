@@ -177,3 +177,7 @@ server/logs/*
 *.swp
 *.swo
 *~
+
+# Exclude master branch from being pushed
+# This prevents accidental pushes to master branch
+# Use release branch for releases instead

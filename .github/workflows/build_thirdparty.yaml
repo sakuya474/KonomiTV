@@ -1,16 +1,57 @@
-name: Build Thirdparty
 
-# thirdparty/ 以下のファイルに変更があったとき or
+name: Build Thirdparty Libraries
+
 # .github/workflows/build_thirdparty.yaml (このファイル) に変更があったとき or 他のワークフローからの呼び出し or 手動実行
 on:
   push:
     branches:
       - master
     paths:
-      - 'thirdparty/**'
       - '.github/workflows/build_thirdparty.yaml'
   workflow_call:
   workflow_dispatch:
+
+# 各サードパーティーライブラリのバージョン
+env:
+  # Python のバージョン (Python Standalone Builds のリリースを指定する)
+  ## ref: https://github.com/indygreg/python-build-standalone/releases
+  PYTHON_TAG: '20250723'
+  PYTHON_MAJOR_VERSION: '3.11'
+  PYTHON_VERSION: '3.11.13'
+  # Poetry のバージョン
+  POETRY_VERSION: '1.8.5'
+  # FFmpeg のバージョン (FFmpeg-Builds のリリースを指定する)
+  ## FFmpeg-Builds は毎月末のリリースが長期間保持されるため、基本毎月末のリリースを指定する
+  ## FFMPEG_HWENCC_* は QSVEncC・NVEncC・VCEEncC (for Ubuntu 20.04 LTS) が依存する FFmpeg のバージョンを示す
+  ## FFmpeg-Builds の最新リリースでは FFmpeg 4.4 系がビルドされなくなったため、FFMPEG_HWENCC_* は 4.4 系の最終ビルドで固定されている
+  ## (正確には Ubuntu 20.04 LTS で入る FFmpeg は 4.2 系だが、FFmpeg 4.x 系であれば ABI 互換性があるため 4.4 系でも動作する)
+  ## ref: https://github.com/BtbN/FFmpeg-Builds/releases
+  FFMPEG_TAG: 'autobuild-2025-09-30-13-19'
+  FFMPEG_MAJOR_VERSION: '7.1'
+  FFMPEG_VERSION: '7.1.2-5-g8f77695e65'
+  FFMPEG_HWENCC_TAG: 'autobuild-2024-03-31-17-28'
+  FFMPEG_HWENCC_MAJOR_VERSION: '4.4'
+  FFMPEG_HWENCC_VERSION: '4.4.4-94-g5d07afd482'
+  # QSVEncC・NVEncC・VCEEncC・rkmppenc のバージョン
+  ## ref: https://github.com/rigaya/QSVEnc/releases
+  ## ref: https://github.com/rigaya/NVEnc/releases
+  ## ref: https://github.com/rigaya/VCEEnc/releases
+  ## ref: https://github.com/rigaya/rkmppenc/releases
+  QSVENCC_VERSION: '7.94'
+  NVENCC_VERSION: '8.10'
+  VCEENCC_VERSION: '9.01'
+  RKMPPENC_VERSION: '0.16'
+  # libmediainfo のバージョン
+  ## Windows 版の pymediainfo (ビルド済みの MediaInfo.dll が同梱されている) とバージョンを合わせる
+  ## ref: https://github.com/sbraz/pymediainfo/blob/v6.0.1/appveyor.yml#L6
+  LIBMEDIAINFO_VERSION: '22.09'
+  # Akebi HTTPS Server ビルド用の Golang のバージョン
+  GOLANG_VERSION: '1.23.8'
+  # ビルド対象の tsreadex・psisiarc・psisimux・Akebi のコミットハッシュ
+  TSREADEX_COMMIT_HASH: 'eddc8bca0de99627d3867259e7a6e777cbd3b3c6'
+  PSISIARC_COMMIT_HASH: '6593a0f63aedaaecfac7682b51e267874a8ec549'
+  PSISIMUX_COMMIT_HASH: '1a01a38886dc41bac81d547ba31fa9eef1bad46b'
+  AKEBI_COMMIT_HASH: 'be986980f7a560b4f74eefcfa2cd474f892f3bc7'
 
 # ジョブの定義
 jobs:
@@ -20,46 +61,127 @@ jobs:
     runs-on: windows-2022
     steps:
 
-      # KonomiTV のソースコードをチェックアウト
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      # MSBuild を PATH に追加
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
 
-      # Python 3.11 環境をセットアップ
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v5
+      # サードパーティーライブラリの配置フォルダを作成
+      - name: Create Thirdparty Folder
+        run: mkdir thirdparty/
+
+      # tsreadex のビルド
+      - name: Build tsreadex
+        run: |
+          git clone https://github.com/xtne6f/tsreadex
+          cd tsreadex/
+          git checkout ${{ env.TSREADEX_COMMIT_HASH }}
+          msbuild tsreadex.sln /t:Build /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v142
+          mkdir ../thirdparty/tsreadex/
+          cp x64/Release/tsreadex.exe ../thirdparty/tsreadex/tsreadex.exe
+          cp License.txt ../thirdparty/tsreadex/
+
+      # psisiarc のビルド
+      - name: Build psisiarc
+        run: |
+          git clone https://github.com/xtne6f/psisiarc
+          cd psisiarc/
+          git checkout ${{ env.PSISIARC_COMMIT_HASH }}
+          msbuild psisiarc.sln /t:Build /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v142
+          mkdir ../thirdparty/psisiarc/
+          cp x64/Release/psisiarc.exe ../thirdparty/psisiarc/psisiarc.exe
+          cp License.txt ../thirdparty/psisiarc/
+
+      # psisimux のビルド
+      - name: Build psisimux
+        run: |
+          git clone https://github.com/xtne6f/psisimux
+          cd psisimux/
+          git checkout ${{ env.PSISIMUX_COMMIT_HASH }}
+          msbuild psisimux.sln /t:Build /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v142
+          mkdir ../thirdparty/psisimux/
+          cp x64/Release/psisimux.exe ../thirdparty/psisimux/psisimux.exe
+          cp License.txt ../thirdparty/psisimux/
+
+      # Golang 環境のセットアップ
+      - name: Setup Golang Environment
+        uses: actions/setup-go@v5
         with:
-          python-version: '3.11'
+          go-version: ${{ env.GOLANG_VERSION }}
+          cache: false
 
-      # サーバーの依存関係をインストール
-      - name: Install Dependencies
-        working-directory: server/
+      # Akebi HTTPS Server のビルド
+      - name: Build Akebi HTTPS Server
         run: |
-          pip install poetry
-          poetry install --no-root
+          go env
+          git clone https://github.com/tsukumijima/Akebi
+          cd Akebi/
+          git checkout ${{ env.AKEBI_COMMIT_HASH }}
+          make build-https-server
+          mkdir ../thirdparty/Akebi/
+          cp akebi-https-server.exe ../thirdparty/Akebi/akebi-https-server.exe
+          cp License.txt ../thirdparty/Akebi/
 
-      # サードパーティーライブラリをビルド
-      - name: Build Thirdparty Libraries
-        working-directory: server/
-        run: poetry run task update-thirdparty 0.1.0
-
-      # ビルドされたサードパーティーライブラリをアーカイブ
-      - name: Archive Thirdparty Libraries
+      # FFmpeg・QSVEncC・NVEncC・VCEEncC のアーカイブのダウンロード
+      # 実際にビルドすると時間がかかりすぎるので、アーカイブをダウンロードして配置する
+      - name: Download and Deploy Encoder Archives
         run: |
-          cd server/thirdparty
-          $files = Get-ChildItem -Force
-          if ($files.Count -gt 0) {
-            7z a -t7z -mx=9 ../thirdparty-windows.7z *
-          } else {
-            echo "No files to archive, creating empty archive"
-            7z a -t7z -mx=9 ../thirdparty-windows.7z -si
-          }
 
-      # アーカイブされたサードパーティーライブラリを Artifact としてアップロード
+          # FFmpeg のアーカイブのダウンロード
+          curl -LO https://github.com/BtbN/FFmpeg-Builds/releases/download/${{ env.FFMPEG_TAG }}/ffmpeg-n${{ env.FFMPEG_VERSION }}-win64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.zip
+          7z x -y ffmpeg-n${{ env.FFMPEG_VERSION }}-win64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.zip
+          mkdir thirdparty/FFmpeg/
+          cp ffmpeg-n${{ env.FFMPEG_VERSION }}-win64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/bin/* thirdparty/FFmpeg/
+          cp ffmpeg-n${{ env.FFMPEG_VERSION }}-win64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/LICENSE.txt thirdparty/FFmpeg/License.txt
+          rm thirdparty/FFmpeg/ffplay.exe
+
+          # QSVEncC のアーカイブのダウンロード
+          curl -LO https://github.com/rigaya/QSVEnc/releases/download/${{ env.QSVENCC_VERSION }}/QSVEncC_${{ env.QSVENCC_VERSION }}_x64.7z
+          7z x -y -o"thirdparty/QSVEncC" QSVEncC_${{ env.QSVENCC_VERSION }}_x64.7z
+          rm -Force thirdparty/QSVEncC/hdr10plus_gen.exe -ErrorAction SilentlyContinue
+          mv thirdparty/QSVEncC/QSVEncC64.exe thirdparty/QSVEncC/QSVEncC.exe
+          curl -L -o thirdparty/QSVEncC/License.txt https://raw.githubusercontent.com/rigaya/QSVEnc/master/license.txt
+
+          # NVEncC のアーカイブのダウンロード
+          curl -LO https://github.com/rigaya/NVEnc/releases/download/${{ env.NVENCC_VERSION }}/NVEncC_${{ env.NVENCC_VERSION }}_x64.7z
+          7z x -y -o"thirdparty/NVEncC" NVEncC_${{ env.NVENCC_VERSION }}_x64.7z
+          rm -Force thirdparty/NVEncC/hdr10plus_gen.exe -ErrorAction SilentlyContinue
+          mv thirdparty/NVEncC/NVEncC64.exe thirdparty/NVEncC/NVEncC.exe
+          curl -L -o thirdparty/NVEncC/License.txt https://raw.githubusercontent.com/rigaya/NVEnc/master/NVEnc_license.txt
+
+          # VCEEncC のアーカイブのダウンロード
+          curl -LO https://github.com/rigaya/VCEEnc/releases/download/${{ env.VCEENCC_VERSION }}/VCEEncC_${{ env.VCEENCC_VERSION }}_x64.7z
+          7z x -y -o"thirdparty/VCEEncC" VCEEncC_${{ env.VCEENCC_VERSION }}_x64.7z
+          rm -Force thirdparty/VCEEncC/hdr10plus_gen.exe -ErrorAction SilentlyContinue
+          mv thirdparty/VCEEncC/VCEEncC64.exe thirdparty/VCEEncC/VCEEncC.exe
+          curl -L -o thirdparty/VCEEncC/License.txt https://raw.githubusercontent.com/rigaya/VCEEnc/master/VCEEnc_license.txt
+
+      # Python Standalone Builds のダウンロードと poetry のインストール
+      - name: Install Python Standalone Builds & pip & poetry
+        run: |
+
+          # Python 本体のダウンロード
+          curl -L -o python.tar.gz https://github.com/indygreg/python-build-standalone/releases/download/${{ env.PYTHON_TAG }}/cpython-${{ env.PYTHON_VERSION }}+${{ env.PYTHON_TAG }}-x86_64-pc-windows-msvc-install_only_stripped.tar.gz
+          tar xvf python.tar.gz
+          mv python/ thirdparty/Python/
+          Rename-Item thirdparty/Python/LICENSE.txt License.txt
+
+          # poetry のインストール
+          thirdparty/Python/python.exe -m pip install poetry==${{ env.POETRY_VERSION }}
+
+      # サードパーティーライブラリを 7z で圧縮
+      # ファイルサイズ縮減のため、圧縮をかなり強めに掛けている
+      # バイナリ圧縮アルゴリズムの BCJ2 はインストーラーで使っている py7zr (liblzma) だとサポートされていないので、代わりに BCJ を使う
+      # ref: https://axelstudios.github.io/7z/#!/
+      - name: Compress Thirdparty Libraries
+        run: |
+          7z a -m0=LZMA2 -mx=9 -md=128m -mfb=128 -ms=16g -mmt=on -mf=BCJ thirdparty-windows.7z thirdparty
+
+      # 7z で圧縮したサードパーティーライブラリを Artifact としてアップロード
       - name: Upload Thirdparty Libraries as Artifact
         uses: actions/upload-artifact@v4
         with:
           name: thirdparty-windows.7z
-          path: server/thirdparty-windows.7z
+          path: thirdparty-windows.7z
 
   # Linux 向けのサードパーティーライブラリのビルド
   build-linux:
@@ -70,50 +192,279 @@ jobs:
           # x64 アーキテクチャ向けのビルド設定
           - arch: amd64
             runner: ubuntu-22.04
+            # x86_64_v2 にすると2008年以降の CPU に搭載されている SSE 命令が使える
+            # ref: https://gregoryszorc.com/docs/python-build-standalone/main/running.html
+            python_arch_name: x86_64_v2
             artifact_suffix: ''
           # arm64 アーキテクチャ向けのビルド設定
           - arch: arm64
             runner: ubuntu-22.04-arm
+            python_arch_name: aarch64
             artifact_suffix: '-arm'
     runs-on: ${{ matrix.runner }}
     steps:
 
-      # KonomiTV のソースコードをチェックアウト
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      # Docker Buildx のセットアップ
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      # Python 3.11 環境をセットアップ
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v5
+      # Dockerfile を作成
+      - name: Create Dockerfile
+        run: |
+          cat <<EOF > Dockerfile
+          FROM ubuntu:20.04
+          ENV DEBIAN_FRONTEND=noninteractive
+          RUN apt-get update && apt-get install -y build-essential pkg-config
+          EOF
+
+      # Ubuntu 20.04 の Docker イメージをビルド
+      - name: Build Docker Image
+        uses: docker/build-push-action@v5
         with:
-          python-version: '3.11'
+          context: .
+          tags: ubuntu:20.04-custom
+          cache-from: type=gha,scope=ubuntu:20.04-custom(${{ matrix.arch }})
+          cache-to: type=gha,scope=ubuntu:20.04-custom(${{ matrix.arch }}),mode=max
+          load: true
 
-      # サーバーの依存関係をインストール
-      - name: Install Dependencies
-        working-directory: server/
+      # Dockerfile を削除
+      - name: Remove Dockerfile
+        run: rm Dockerfile
+
+      # サードパーティーライブラリの配置フォルダを作成
+      - name: Create Thirdparty Folder
+        run: mkdir thirdparty/
+
+      # tsreadex のビルド
+      - name: Build tsreadex
         run: |
-          pip install poetry
-          poetry install --no-root
+          git clone https://github.com/xtne6f/tsreadex
+          cd tsreadex/
+          git checkout ${{ env.TSREADEX_COMMIT_HASH }}
+          docker run --rm -i -v $(pwd):/work -w /work ubuntu:20.04-custom bash -c 'make'
+          mkdir ../thirdparty/tsreadex/
+          cp tsreadex ../thirdparty/tsreadex/tsreadex.elf
+          chmod a+x ../thirdparty/tsreadex/tsreadex.elf
+          cp License.txt ../thirdparty/tsreadex/
 
-      # サードパーティーライブラリをビルド
-      - name: Build Thirdparty Libraries
-        working-directory: server/
-        run: poetry run task update-thirdparty 0.1.0
-
-      # ビルドされたサードパーティーライブラリをアーカイブ
-      - name: Archive Thirdparty Libraries
+      # psisiarc のビルド
+      - name: Build psisiarc
         run: |
-          cd server/thirdparty
-          if [ "$(ls -A .)" ]; then
-            tar -cJf ../thirdparty-linux${{ matrix.artifact_suffix }}.tar.xz *
-          else
-            echo "No files to archive, creating empty archive"
-            tar -cJf ../thirdparty-linux${{ matrix.artifact_suffix }}.tar.xz --files-from /dev/null
-          fi
+          git clone https://github.com/xtne6f/psisiarc
+          cd psisiarc/
+          git checkout ${{ env.PSISIARC_COMMIT_HASH }}
+          docker run --rm -i -v $(pwd):/work -w /work ubuntu:20.04-custom bash -c 'make'
+          mkdir ../thirdparty/psisiarc/
+          cp psisiarc ../thirdparty/psisiarc/psisiarc.elf
+          chmod a+x ../thirdparty/psisiarc/psisiarc.elf
+          cp License.txt ../thirdparty/psisiarc/
 
-      # アーカイブされたサードパーティーライブラリを Artifact としてアップロード
+      # psisimux のビルド
+      - name: Build psisimux
+        run: |
+          git clone https://github.com/xtne6f/psisimux
+          cd psisimux/
+          git checkout ${{ env.PSISIMUX_COMMIT_HASH }}
+          docker run --rm -i -v $(pwd):/work -w /work ubuntu:20.04-custom bash -c 'make'
+          mkdir ../thirdparty/psisimux/
+          cp psisimux ../thirdparty/psisimux/psisimux.elf
+          chmod a+x ../thirdparty/psisimux/psisimux.elf
+          cp License.txt ../thirdparty/psisimux/
+
+      # デフォルトで勝手にキャッシュされてる (?) Golang を削除
+      # ここで削除しておかないと意図しないバージョンの Golang が使われてしまうことがある (?)
+      - name: Remove Default Golang
+        run: sudo rm -rf /opt/hostedtoolcache/go/*
+
+      # Golang 環境のセットアップ
+      - name: Setup Golang Environment
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GOLANG_VERSION }}
+          cache: false
+
+      # Akebi HTTPS Server のビルド
+      # CGO_ENABLED=0 を指定することで、glibc 非依存のバイナリを生成できる
+      # ref: https://www.elastiflow.com/blog/posts/disabling-cgo-to-remove-glibc-dependency
+      - name: Build Akebi HTTPS Server
+        run: |
+          go env
+          git clone https://github.com/tsukumijima/Akebi
+          cd Akebi/
+          git checkout ${{ env.AKEBI_COMMIT_HASH }}
+          CGO_ENABLED=0 GOARCH=${{ matrix.arch }} make build-https-server
+          mkdir ../thirdparty/Akebi/
+          cp akebi-https-server ../thirdparty/Akebi/akebi-https-server.elf
+          chmod a+x ../thirdparty/Akebi/akebi-https-server.elf
+          cp License.txt ../thirdparty/Akebi/
+
+      # FFmpeg・QSVEncC・NVEncC・VCEEncC のアーカイブのダウンロードと配置
+      # ドライバさえ入っていればスタンドアローンで実行できるように構成を工夫している
+      - name: Download and Deploy Encoder Archives (for x64)
+        if: matrix.arch == 'amd64'
+        run: |
+
+          # p7zip-full と patchelf のインストール
+          ## patchelf は ELF バイナリに埋め込まれている rpath (動的ライブラリの検索パス) を変更するツールで、
+          ## QSV/NV/VCEEncC に rpath を追加するために使う
+          ## ref: https://stackoverflow.com/questions/13769141/can-i-change-rpath-in-an-already-compiled-binary
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full patchelf
+
+          # FFmpeg のアーカイブのダウンロード
+          curl -LO https://github.com/BtbN/FFmpeg-Builds/releases/download/${{ env.FFMPEG_TAG }}/ffmpeg-n${{ env.FFMPEG_VERSION }}-linux64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.tar.xz
+          tar xvf ffmpeg-n${{ env.FFMPEG_VERSION }}-linux64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.tar.xz
+          mkdir thirdparty/FFmpeg/
+          cp ffmpeg-n${{ env.FFMPEG_VERSION }}-linux64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/bin/* thirdparty/FFmpeg/
+          cp -r ffmpeg-n${{ env.FFMPEG_VERSION }}-linux64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/lib/* thirdparty/FFmpeg/
+          cp ffmpeg-n${{ env.FFMPEG_VERSION }}-linux64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/LICENSE.txt thirdparty/FFmpeg/License.txt
+          rm -rf thirdparty/FFmpeg/pkgconfig
+          mv thirdparty/FFmpeg/ffmpeg thirdparty/FFmpeg/ffmpeg.elf
+          mv thirdparty/FFmpeg/ffprobe thirdparty/FFmpeg/ffprobe.elf
+          rm thirdparty/FFmpeg/ffplay
+          chmod a+x thirdparty/FFmpeg/ffmpeg.elf
+          patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' thirdparty/FFmpeg/ffmpeg.elf
+          chmod a+x thirdparty/FFmpeg/ffprobe.elf
+          patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' thirdparty/FFmpeg/ffprobe.elf
+
+          # QSV/NV/VCEEncC が依存しているライブラリをダウンロードしてまとめる
+          ## ref: https://stackoverflow.com/questions/13756800/how-to-download-all-dependencies-and-packages-to-directory
+          ## ref: https://askubuntu.com/questions/1260559/how-to-install-deb-packages-in-a-custom-folder-different-from-root-using-dp
+          mkdir thirdparty/Library/
+          curl -LO https://github.com/BtbN/FFmpeg-Builds/releases/download/${{ env.FFMPEG_HWENCC_TAG }}/ffmpeg-n${{ env.FFMPEG_HWENCC_VERSION }}-linux64-gpl-shared-${{ env.FFMPEG_HWENCC_MAJOR_VERSION }}.tar.xz
+          tar xvf ffmpeg-n${{ env.FFMPEG_HWENCC_VERSION }}-linux64-gpl-shared-${{ env.FFMPEG_HWENCC_MAJOR_VERSION }}.tar.xz
+          cp -ar ffmpeg-n${{ env.FFMPEG_HWENCC_VERSION }}-linux64-gpl-shared-${{ env.FFMPEG_HWENCC_MAJOR_VERSION }}/lib/* thirdparty/Library/
+          docker run --rm -i -v $(pwd):/work -w /work ubuntu:20.04-custom bash -c 'apt-get update && apt-get download libass9 libbrotli1 libexpat1 libfontconfig1 libfreetype6 libfribidi0 libglib2.0-0 libgraphite2-3 libharfbuzz0b libpcre3 libpng16-16 libuuid1 zlib1g'
+          ls -1 | grep [.]deb >> all_debs.txt && cat all_debs.txt | while read fn; do dpkg-deb -x $fn `pwd`/thirdparty/Library; done && rm all_debs.txt
+          cp -ar thirdparty/Library/lib/x86_64-linux-gnu/* thirdparty/Library/
+          rm -rf thirdparty/Library/lib/
+          cp -ar thirdparty/Library/usr/lib/x86_64-linux-gnu/* thirdparty/Library/
+          rm -rf thirdparty/Library/usr/
+          rm -rf thirdparty/Library/pkgconfig
+          find thirdparty/Library/*.so* -not -type l -not -type d | while read fn; do patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' $fn; done
+          find thirdparty/Library/*.so* -not -type l -not -type d | xargs chmod a+x
+
+          # QSVEncC のアーカイブのダウンロード
+          curl -LO https://github.com/rigaya/QSVEnc/releases/download/${{ env.QSVENCC_VERSION }}/qsvencc_${{ env.QSVENCC_VERSION }}_Ubuntu20.04_amd64.deb
+          7z x -y qsvencc_${{ env.QSVENCC_VERSION }}_Ubuntu20.04_amd64.deb && tar xvf data.tar
+          mkdir thirdparty/QSVEncC/
+          cp usr/bin/qsvencc thirdparty/QSVEncC/QSVEncC.elf
+          chmod a+x thirdparty/QSVEncC/QSVEncC.elf
+          patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' thirdparty/QSVEncC/QSVEncC.elf
+          curl -L -o thirdparty/QSVEncC/License.txt https://raw.githubusercontent.com/rigaya/QSVEnc/master/license.txt
+
+          # NVEncC のアーカイブのダウンロード
+          curl -LO https://github.com/rigaya/NVEnc/releases/download/${{ env.NVENCC_VERSION }}/nvencc_${{ env.NVENCC_VERSION }}_Ubuntu20.04_amd64.deb
+          7z x -y nvencc_${{ env.NVENCC_VERSION }}_Ubuntu20.04_amd64.deb && tar xvf data.tar
+          mkdir thirdparty/NVEncC/
+          cp usr/bin/nvencc thirdparty/NVEncC/NVEncC.elf
+          chmod a+x thirdparty/NVEncC/NVEncC.elf
+          patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' thirdparty/NVEncC/NVEncC.elf
+          curl -L -o thirdparty/NVEncC/License.txt https://raw.githubusercontent.com/rigaya/NVEnc/master/NVEnc_license.txt
+
+          # VCEEncC のアーカイブのダウンロード
+          curl -LO https://github.com/rigaya/VCEEnc/releases/download/${{ env.VCEENCC_VERSION }}/vceencc_${{ env.VCEENCC_VERSION }}_Ubuntu20.04_amd64.deb
+          7z x -y vceencc_${{ env.VCEENCC_VERSION }}_Ubuntu20.04_amd64.deb && tar xvf data.tar
+          mkdir thirdparty/VCEEncC/
+          cp usr/bin/vceencc thirdparty/VCEEncC/VCEEncC.elf
+          chmod a+x thirdparty/VCEEncC/VCEEncC.elf
+          patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' thirdparty/VCEEncC/VCEEncC.elf
+          curl -L -o thirdparty/VCEEncC/License.txt https://raw.githubusercontent.com/rigaya/VCEEnc/master/VCEEnc_license.txt
+
+          # libmediainfo のアーカイブのダウンロード
+          ## AWS Lambda 向けのビルドが完全な Static Build で扱いやすそうだったので、それを使う
+          curl -L -o libmediainfo.zip https://mediaarea.net/download/binary/libmediainfo0/${{ env.LIBMEDIAINFO_VERSION }}/MediaInfo_DLL_${{ env.LIBMEDIAINFO_VERSION }}_Lambda_x86_64.zip
+          7z x -y libmediainfo.zip
+          cp -a lib/* thirdparty/Library/
+          rm -rf lib/
+          chmod a+x thirdparty/Library/libmediainfo.so*
+
+      # FFmpeg・rkmppenc のアーカイブのダウンロードと配置
+      # ドライバさえ入っていればスタンドアローンで実行できるように構成を工夫している
+      - name: Download and Deploy Encoder Archives (for arm64)
+        if: matrix.arch == 'arm64'
+        run: |
+
+          # p7zip-full と patchelf のインストール
+          ## patchelf は ELF バイナリに埋め込まれている rpath (動的ライブラリの検索パス) を変更するツールで、
+          ## rkmppenc に rpath を追加するために使う
+          ## ref: https://stackoverflow.com/questions/13769141/can-i-change-rpath-in-an-already-compiled-binary
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full patchelf
+
+          # FFmpeg のアーカイブのダウンロード
+          curl -LO https://github.com/BtbN/FFmpeg-Builds/releases/download/${{ env.FFMPEG_TAG }}/ffmpeg-n${{ env.FFMPEG_VERSION }}-linuxarm64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.tar.xz
+          tar xvf ffmpeg-n${{ env.FFMPEG_VERSION }}-linuxarm64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.tar.xz
+          mkdir thirdparty/FFmpeg/
+          cp ffmpeg-n${{ env.FFMPEG_VERSION }}-linuxarm64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/bin/* thirdparty/FFmpeg/
+          cp -r ffmpeg-n${{ env.FFMPEG_VERSION }}-linuxarm64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/lib/* thirdparty/FFmpeg/
+          cp ffmpeg-n${{ env.FFMPEG_VERSION }}-linuxarm64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/LICENSE.txt thirdparty/FFmpeg/License.txt
+          rm -rf thirdparty/FFmpeg/pkgconfig
+          mv thirdparty/FFmpeg/ffmpeg thirdparty/FFmpeg/ffmpeg.elf
+          mv thirdparty/FFmpeg/ffprobe thirdparty/FFmpeg/ffprobe.elf
+          rm thirdparty/FFmpeg/ffplay
+          chmod a+x thirdparty/FFmpeg/ffmpeg.elf
+          patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' thirdparty/FFmpeg/ffmpeg.elf
+          chmod a+x thirdparty/FFmpeg/ffprobe.elf
+          patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' thirdparty/FFmpeg/ffprobe.elf
+
+          # rkmppenc が依存しているライブラリをダウンロードしてまとめる
+          ## ref: https://stackoverflow.com/questions/13756800/how-to-download-all-dependencies-and-packages-to-directory
+          ## ref: https://askubuntu.com/questions/1260559/how-to-install-deb-packages-in-a-custom-folder-different-from-root-using-dp
+          mkdir thirdparty/Library/
+          docker run --rm -i -v $(pwd):/work -w /work ubuntu:20.04-custom bash -c 'apt-get update && apt-get download libasound2 libass9 libbluray2 libexpat1 libfontconfig1 libfreetype6 libfribidi0 libglib2.0-0 libgomp1 libgraphite2-3 libharfbuzz0b libicu66 liblzma5 libmp3lame0 libogg0 libopus0 libpcre3 libpng16-16 libsoxr0 libspeex1 libssl1.1 libtwolame0 libuuid1 libvorbis0a libvorbisenc2 libvpx6 libxml2 zlib1g'
+          curl -LO https://github.com/tsukumijima/mpp/releases/download/v1.5.0-1-a94f677/librockchip-mpp1_1.5.0-1_arm64.deb
+          curl -LO https://github.com/tsukumijima/librga-rockchip/releases/download/v2.2.0-1-5cb2d9d/librga2_2.2.0-1_arm64.deb
+          ls -1 | grep [.]deb >> all_debs.txt && cat all_debs.txt | while read fn; do dpkg-deb -x $fn `pwd`/thirdparty/Library; done && rm all_debs.txt
+          cp -ar thirdparty/Library/lib/aarch64-linux-gnu/* thirdparty/Library/
+          rm -rf thirdparty/Library/lib/
+          cp -ar thirdparty/Library/usr/lib/aarch64-linux-gnu/* thirdparty/Library/
+          rm -rf thirdparty/Library/usr/
+          rm -rf thirdparty/Library/pkgconfig
+          find thirdparty/Library/*.so* -not -type l -not -type d | while read fn; do patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' $fn; done
+          find thirdparty/Library/*.so* -not -type l -not -type d | xargs chmod a+x
+
+          # rkmppenc のアーカイブのダウンロード
+          curl -LO https://github.com/rigaya/rkmppenc/releases/download/${{ env.RKMPPENC_VERSION }}/rkmppenc_${{ env.RKMPPENC_VERSION }}_Ubuntu20.04_arm64.deb
+          7z x -y rkmppenc_${{ env.RKMPPENC_VERSION }}_Ubuntu20.04_arm64.deb && tar xvf data.tar
+          mkdir thirdparty/rkmppenc/
+          cp usr/bin/rkmppenc thirdparty/rkmppenc/rkmppenc.elf
+          chmod a+x thirdparty/rkmppenc/rkmppenc.elf
+          patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' thirdparty/rkmppenc/rkmppenc.elf
+          curl -L -o thirdparty/rkmppenc/License.txt https://raw.githubusercontent.com/rigaya/rkmppenc/master/rkmppenc_license.txt
+
+          # libmediainfo のアーカイブのダウンロード
+          ## AWS Lambda 向けのビルドが完全な Static Build で扱いやすそうだったので、それを使う
+          curl -L -o libmediainfo.zip https://mediaarea.net/download/binary/libmediainfo0/${{ env.LIBMEDIAINFO_VERSION }}/MediaInfo_DLL_${{ env.LIBMEDIAINFO_VERSION }}_Lambda_arm64.zip
+          7z x -y libmediainfo.zip
+          cp -a lib/* thirdparty/Library/
+          rm -rf lib/
+          chmod a+x thirdparty/Library/libmediainfo.so*
+
+      # Python Standalone Builds のダウンロードと poetry のインストール
+      - name: Install Python Standalone Builds & pip & poetry
+        run: |
+
+          # Python 本体のダウンロード
+          curl -L -o python.tar.gz https://github.com/indygreg/python-build-standalone/releases/download/${{ env.PYTHON_TAG }}/cpython-${{ env.PYTHON_VERSION }}+${{ env.PYTHON_TAG }}-${{ matrix.python_arch_name }}-unknown-linux-gnu-install_only_stripped.tar.gz
+          tar xvf python.tar.gz
+          mv python/ thirdparty/Python/
+
+          # poetry のインストール
+          cd thirdparty/Python/
+          docker run --rm -i -v $(pwd):/work -w /work ubuntu:20.04-custom bash -c './bin/python -m pip install poetry==${{ env.POETRY_VERSION }}'
+
+      # サードパーティーライブラリを tar.xz で圧縮
+      # ファイルサイズ縮減のため、圧縮をかなり強めに掛けている
+      # ref: https://axelstudios.github.io/7z/#!/
+      - name: Compress Thirdparty Libraries
+        run: |
+          tar cvf thirdparty-linux${{ matrix.artifact_suffix }}.tar thirdparty
+          7z a -txz -m0=LZMA2 -mx=9 -md=128m -mfb=128 -mmt=on thirdparty-linux${{ matrix.artifact_suffix }}.tar.xz thirdparty-linux${{ matrix.artifact_suffix }}.tar
+
+      # 7z で圧縮したサードパーティーライブラリを Artifact としてアップロード
       - name: Upload Thirdparty Libraries as Artifact
         uses: actions/upload-artifact@v4
         with:
           name: thirdparty-linux${{ matrix.artifact_suffix }}.tar.xz
-          path: server/thirdparty-linux${{ matrix.artifact_suffix }}.tar.xz
+          path: thirdparty-linux${{ matrix.artifact_suffix }}.tar.xz
