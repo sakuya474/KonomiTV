@@ -37,10 +37,20 @@ jobs:
           pip install poetry
           poetry install --no-root
 
-      # サードパーティーライブラリをビルド
-      - name: Build Thirdparty Libraries
+      # サードパーティーライブラリをダウンロード（一時的にtsukumijimaから）
+      - name: Download Thirdparty Libraries
         working-directory: server/
-        run: poetry run task update-thirdparty
+        run: |
+          # 一時的にtsukumijimaからダウンロード
+          python -c "
+          import sys
+          sys.path.append('.')
+          from misc.UpdateThirdparty import main
+          import os
+          # 一時的にURLを変更
+          os.environ['THIRDPARTY_BASE_URL'] = 'https://nightly.link/tsukumijima/KonomiTV/workflows/build_thirdparty.yaml/master/'
+          main('latest')
+          "
 
       # ビルドされたサードパーティーライブラリをアーカイブ
       - name: Archive Thirdparty Libraries
@@ -95,10 +105,20 @@ jobs:
           pip install poetry
           poetry install --no-root
 
-      # サードパーティーライブラリをビルド
-      - name: Build Thirdparty Libraries
+      # サードパーティーライブラリをダウンロード（一時的にtsukumijimaから）
+      - name: Download Thirdparty Libraries
         working-directory: server/
-        run: poetry run task update-thirdparty
+        run: |
+          # 一時的にtsukumijimaからダウンロード
+          python -c "
+          import sys
+          sys.path.append('.')
+          from misc.UpdateThirdparty import main
+          import os
+          # 一時的にURLを変更
+          os.environ['THIRDPARTY_BASE_URL'] = 'https://nightly.link/tsukumijima/KonomiTV/workflows/build_thirdparty.yaml/master/'
+          main('latest')
+          "
 
       # ビルドされたサードパーティーライブラリをアーカイブ
       - name: Archive Thirdparty Libraries
