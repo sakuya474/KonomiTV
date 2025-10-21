@@ -617,10 +617,14 @@ def Installer(version: str, install_fork: bool) -> None:
 
         # ソースコードを解凍して展開
         shutil.unpack_archive(source_code_file.name, install_path.parent, format='zip')
-        # フォーク版の場合は KonomiTV-master/ 、それ以外は KonomiTV-master/ (master ブランチをダウンロードした場合)
+        # フォーク版の場合は KonomiTV-release/ (release ブランチをダウンロードした場合)
         # または KonomiTV-{version}/ (タグをダウンロードした場合)
+        # それ以外は KonomiTV-master/ (master ブランチをダウンロードした場合)
         if install_fork is True:
-            shutil.move(install_path.parent / 'KonomiTV-master/', install_path)
+            if version == 'latest':
+                shutil.move(install_path.parent / 'KonomiTV-release/', install_path)
+            else:
+                shutil.move(install_path.parent / f'KonomiTV-{version}/', install_path)
         else:
             if version == 'latest':
                 shutil.move(install_path.parent / 'KonomiTV-master/', install_path)
