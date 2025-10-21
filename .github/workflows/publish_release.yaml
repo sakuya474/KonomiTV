@@ -86,18 +86,34 @@ jobs:
       # リリースコミットに対応する新バージョンのタグを release ブランチで作成
       - name: Create New Version Tag
         working-directory: KonomiTV
-        env:
-          GIT_AUTHOR_NAME: "GitHub Actions"
-          GIT_AUTHOR_EMAIL: "actions@github.com"
-          GIT_COMMITTER_NAME: "GitHub Actions"
-          GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
+          # Git設定
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          
+          # 現在の状況を確認
+          echo "Current branch: $(git branch --show-current)"
+          echo "Current commit: $(git rev-parse HEAD)"
+          echo "Version: ${{ steps.get_version.outputs.version }}"
+          
           # 既存のタグを削除（存在する場合）
-          git tag -d v${{ steps.get_version.outputs.version }} || true
-          git push origin --delete v${{ steps.get_version.outputs.version }} || true
+          if git tag -l | grep -q "v${{ steps.get_version.outputs.version }}"; then
+            echo "Tag v${{ steps.get_version.outputs.version }} already exists, deleting..."
+            git tag -d v${{ steps.get_version.outputs.version }} || true
+            git push origin --delete v${{ steps.get_version.outputs.version }} || true
+          fi
+          
           # 新しいタグを作成
-          git tag v${{ steps.get_version.outputs.version }}
-          git push origin --tags
+          echo "Creating tag v${{ steps.get_version.outputs.version }}..."
+          git tag -a v${{ steps.get_version.outputs.version }} -m "Release v${{ steps.get_version.outputs.version }}"
+          
+          # タグをプッシュ
+          echo "Pushing tag v${{ steps.get_version.outputs.version }}..."
+          git push origin v${{ steps.get_version.outputs.version }}
+          
+          # 確認
+          echo "Tag created successfully:"
+          git tag -l | grep "v${{ steps.get_version.outputs.version }}"
 
       # リリースを作成
       - name: Create Release
@@ -108,7 +124,7 @@ jobs:
           name: Release v${{ steps.get_version.outputs.version }}
           body: |
             KonomiTV v${{ steps.get_version.outputs.version }} をリリースしました。
-            
+
             **変更点:**
             - BDライブラリ機能の追加
             - インストーラーの改善
