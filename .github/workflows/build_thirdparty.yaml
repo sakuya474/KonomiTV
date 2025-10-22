@@ -208,11 +208,11 @@ jobs:
             # ref: https://gregoryszorc.com/docs/python-build-standalone/main/running.html
             python_arch_name: x86_64_v2
             artifact_suffix: ''
-          # arm64 アーキテクチャ向けのビルド設定
-          - arch: arm64
-            runner: ubuntu-22.04-arm
-            python_arch_name: aarch64
-            artifact_suffix: '-arm'
+          # arm64 アーキテクチャ向けのビルド設定 (現在は無効化)
+          # - arch: arm64
+          #   runner: ubuntu-22.04-arm
+          #   python_arch_name: aarch64
+          #   artifact_suffix: '-arm'
     runs-on: ${{ matrix.runner }}
     steps:
 
@@ -403,79 +403,6 @@ jobs:
           chmod a+x thirdparty/tsreplace/tsreplace.elf
           curl -L -o thirdparty/tsreplace/License.txt https://raw.githubusercontent.com/rigaya/tsreplace/master/License.txt
 
-      # FFmpeg・rkmppenc のアーカイブのダウンロードと配置
-      # ドライバさえ入っていればスタンドアローンで実行できるように構成を工夫している
-      - name: Download and Deploy Encoder Archives (for arm64)
-        if: matrix.arch == 'arm64'
-        run: |
-
-          # p7zip-full と patchelf のインストール
-          ## patchelf は ELF バイナリに埋め込まれている rpath (動的ライブラリの検索パス) を変更するツールで、
-          ## rkmppenc に rpath を追加するために使う
-          ## ref: https://stackoverflow.com/questions/13769141/can-i-change-rpath-in-an-already-compiled-binary
-          sudo apt-get update
-          sudo apt-get install -y p7zip-full patchelf
-
-          # FFmpeg のアーカイブのダウンロード
-          curl -LO https://github.com/BtbN/FFmpeg-Builds/releases/download/${{ env.FFMPEG_TAG }}/ffmpeg-n${{ env.FFMPEG_VERSION }}-linuxarm64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.tar.xz
-          tar xvf ffmpeg-n${{ env.FFMPEG_VERSION }}-linuxarm64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.tar.xz
-          mkdir thirdparty/FFmpeg/
-          cp ffmpeg-n${{ env.FFMPEG_VERSION }}-linuxarm64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/bin/* thirdparty/FFmpeg/
-          cp -r ffmpeg-n${{ env.FFMPEG_VERSION }}-linuxarm64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/lib/* thirdparty/FFmpeg/
-          cp ffmpeg-n${{ env.FFMPEG_VERSION }}-linuxarm64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/LICENSE.txt thirdparty/FFmpeg/License.txt
-          rm -rf thirdparty/FFmpeg/pkgconfig
-          mv thirdparty/FFmpeg/ffmpeg thirdparty/FFmpeg/ffmpeg.elf
-          mv thirdparty/FFmpeg/ffprobe thirdparty/FFmpeg/ffprobe.elf
-          rm thirdparty/FFmpeg/ffplay
-          chmod a+x thirdparty/FFmpeg/ffmpeg.elf
-          patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' thirdparty/FFmpeg/ffmpeg.elf
-          chmod a+x thirdparty/FFmpeg/ffprobe.elf
-          patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' thirdparty/FFmpeg/ffprobe.elf
-
-          # rkmppenc が依存しているライブラリをダウンロードしてまとめる
-          ## ref: https://stackoverflow.com/questions/13756800/how-to-download-all-dependencies-and-packages-to-directory
-          ## ref: https://askubuntu.com/questions/1260559/how-to-install-deb-packages-in-a-custom-folder-different-from-root-using-dp
-          mkdir thirdparty/Library/
-          docker run --rm -i -v $(pwd):/work -w /work ubuntu:20.04-custom bash -c 'apt-get update && apt-get download libasound2 libass9 libbluray2 libexpat1 libfontconfig1 libfreetype6 libfribidi0 libglib2.0-0 libgomp1 libgraphite2-3 libharfbuzz0b libicu66 liblzma5 libmp3lame0 libogg0 libopus0 libpcre3 libpng16-16 libsoxr0 libspeex1 libssl1.1 libtwolame0 libuuid1 libvorbis0a libvorbisenc2 libvpx6 libxml2 zlib1g'
-          curl -LO https://github.com/tsukumijima/mpp/releases/download/v1.5.0-1-a94f677/librockchip-mpp1_1.5.0-1_arm64.deb
-          curl -LO https://github.com/tsukumijima/librga-rockchip/releases/download/v2.2.0-1-5cb2d9d/librga2_2.2.0-1_arm64.deb
-          ls -1 | grep [.]deb >> all_debs.txt && cat all_debs.txt | while read fn; do dpkg-deb -x $fn `pwd`/thirdparty/Library; done && rm all_debs.txt
-          cp -ar thirdparty/Library/lib/aarch64-linux-gnu/* thirdparty/Library/
-          rm -rf thirdparty/Library/lib/
-          cp -ar thirdparty/Library/usr/lib/aarch64-linux-gnu/* thirdparty/Library/
-          rm -rf thirdparty/Library/usr/
-          rm -rf thirdparty/Library/pkgconfig
-          find thirdparty/Library/*.so* -not -type l -not -type d | while read fn; do patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' $fn; done
-          find thirdparty/Library/*.so* -not -type l -not -type d | xargs chmod a+x
-
-          # rkmppenc のアーカイブのダウンロード
-          curl -LO https://github.com/rigaya/rkmppenc/releases/download/${{ env.RKMPPENC_VERSION }}/rkmppenc_${{ env.RKMPPENC_VERSION }}_Ubuntu20.04_arm64.deb
-          7z x -y rkmppenc_${{ env.RKMPPENC_VERSION }}_Ubuntu20.04_arm64.deb && tar xvf data.tar
-          mkdir thirdparty/rkmppenc/
-          cp usr/bin/rkmppenc thirdparty/rkmppenc/rkmppenc.elf
-          chmod a+x thirdparty/rkmppenc/rkmppenc.elf
-          patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' thirdparty/rkmppenc/rkmppenc.elf
-          curl -L -o thirdparty/rkmppenc/License.txt https://raw.githubusercontent.com/rigaya/rkmppenc/master/rkmppenc_license.txt
-
-          # libmediainfo のアーカイブのダウンロード
-          ## AWS Lambda 向けのビルドが完全な Static Build で扱いやすそうだったので、それを使う
-          curl -L -o libmediainfo.zip https://mediaarea.net/download/binary/libmediainfo0/${{ env.LIBMEDIAINFO_VERSION }}/MediaInfo_DLL_${{ env.LIBMEDIAINFO_VERSION }}_Lambda_arm64.zip
-          7z x -y libmediainfo.zip
-          cp -a lib/* thirdparty/Library/
-          rm -rf lib/
-          chmod a+x thirdparty/Library/libmediainfo.so*
-
-      # tsreplace のダウンロード (rigaya 氏のリリースから直接ダウンロード) (for arm64)
-      - name: Download tsreplace (for arm64)
-        if: matrix.arch == 'arm64'
-        run: |
-          sudo apt-get install -y p7zip-full
-          mkdir thirdparty/tsreplace/
-          curl -LO https://github.com/rigaya/tsreplace/releases/download/${{ env.TSREPLACE_VERSION }}/tsreplace_${{ env.TSREPLACE_VERSION }}_Ubuntu20.04_arm64.deb
-          7z x -y tsreplace_${{ env.TSREPLACE_VERSION }}_Ubuntu20.04_arm64.deb && tar xvf data.tar
-          cp usr/bin/tsreplace thirdparty/tsreplace/tsreplace.elf
-          chmod a+x thirdparty/tsreplace/tsreplace.elf
-          curl -L -o thirdparty/tsreplace/License.txt https://raw.githubusercontent.com/rigaya/tsreplace/master/License.txt
 
       # Python Standalone Builds のダウンロードと poetry のインストール
       - name: Install Python Standalone Builds & pip & poetry
