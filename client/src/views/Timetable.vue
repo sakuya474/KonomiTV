@@ -21,10 +21,9 @@
                         </div>
                     </div>
                     <div class="timetable-header__date-control">
-                        <v-btn @click="timetableStore.setPreviousDate" class="mr-2">前日</v-btn>
-                        <h2 class="mx-4 date-display">{{ formattedDate }}</h2>
-                        <v-btn @click="timetableStore.setNextDate" class="ml-2">翌日</v-btn>
-                        <v-btn @click="timetableStore.setCurrentDate" class="ml-4">今日</v-btn>
+                        <v-btn @click="timetableStore.setPreviousDate" class="mr-2">昨日</v-btn>
+                        <v-btn @click="timetableStore.setCurrentDate" class="mx-2">今日</v-btn>
+                        <v-btn @click="timetableStore.setNextDate" class="ml-2">明日</v-btn>
                     </div>
                 </div>
 
@@ -257,6 +256,7 @@ const getProgramStyle = (program: IProgram, ch_index: number) => {
     const start = new Date(program.start_time);
     const start_minutes = (start.getHours() - 4 + 24) % 24 * 60 + start.getMinutes();
     const duration_minutes = program.duration / 60;
+
     const genre = program.genres[0]?.major || 'その他';
     const color = genre_colors[genre] || default_genre_color;
     const style: { [key: string]: any } = {
@@ -288,7 +288,7 @@ const isToday = computed(() => {
 const currentTimeLineStyle = computed(() => {
     const minutes_from_4am = ((now.value.getHours() - 4 + 24) % 24) * 60 + now.value.getMinutes();
     return {
-        top: `${minutes_from_4am * 2}px`,
+        top: `${minutes_from_4am * 6}px`,
     };
 });
 
@@ -526,7 +526,7 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
 
     .hour-label {
         position: relative;
-        height: 120px;
+        height: 360px;
         text-align: right;
         padding-right: 8px;
         font-size: 14px;
@@ -543,7 +543,7 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
     grid-row: 2;
     grid-column: 2;
     display: grid;
-    grid-template-rows: repeat(24 * 60, 2px);
+    grid-template-rows: repeat(24 * 60, 6px);
     position: relative;
 
     .channel-border {
@@ -566,15 +566,16 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
 
 .program-cell {
     margin: 1px;
-    padding: 8px;
-    border-radius: 8px;
+    padding: 4px;
+    border-radius: 4px;
     cursor: pointer;
     overflow: hidden;
     transition: filter 0.2s, transform 0.2s;
     text-orientation: mixed;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
+    min-height: 30px;
 
     &:hover {
         filter: brightness(1.1);
@@ -590,9 +591,13 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
 
     .program-title {
         font-weight: bold;
-        font-size: 0.9em;
+        font-size: 0.8em;
         line-height: 1.2;
         word-break: break-word;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
     }
 
     .program-badges {
@@ -625,8 +630,8 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
     }
 
     .program-description {
-        font-size: 0.75em;
-        line-height: 1.3;
+        font-size: 0.7em;
+        line-height: 1.2;
         opacity: 0.9;
         word-break: break-word;
         flex-grow: 1;

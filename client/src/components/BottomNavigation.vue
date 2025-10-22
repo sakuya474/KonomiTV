@@ -52,18 +52,23 @@
     @include smartphone-vertical {
         display: flex;
         // iPhone X 以降の Home Indicator の高さ分
-        width: calc(100% - 8px * 2) !important;
+        width: 100% !important;
+        padding: 0 2px;
         padding-bottom: env(safe-area-inset-bottom);
-        box-sizing: content-box;
+        box-sizing: border-box;
     }
 
     .v-btn.bottom-navigation-button {
-        flex-basis: 0;  // 均等に割り振る
-        min-width: 75px !important;
-        padding: 0 !important;
+        flex: 1;  // 均等に割り振る
+        min-width: 0 !important;
+        max-width: none !important;
+        padding: 0 2px !important;
         color: rgb(var(--v-theme-text-darken-1)) !important;
         font-weight: bold;
-        font-size: 10.5px;
+        font-size: 9px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
 
         &.v-btn--active {
             color: rgb(var(--v-theme-primary)) !important;
