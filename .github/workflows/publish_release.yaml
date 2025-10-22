@@ -92,6 +92,8 @@ jobs:
             echo "Tag v${{ steps.get_version.outputs.version }} already exists, deleting..."
             git tag -d v${{ steps.get_version.outputs.version }} || true
             git push origin --delete v${{ steps.get_version.outputs.version }} || true
+          else
+            echo "Tag v${{ steps.get_version.outputs.version }} does not exist, skipping deletion"
           fi
 
       # リリースを作成
