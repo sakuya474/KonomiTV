@@ -8,7 +8,7 @@
                 <div class="videos-search-container">
                     <Breadcrumbs :crumbs="[
                         { name: 'ホーム', path: '/' },
-                        { name: 'ビデオをみる', path: '/videos/' },
+                        { name: '録画を見る', path: '/videos/' },
                         { name: '検索結果', path: `/videos/search?query=${encodeURIComponent(query)}`, disabled: true },
                     ]" />
                     <RecordedProgramList
@@ -21,7 +21,7 @@
                         :isSearching="is_searching"
                         :showBackButton="true"
                         :breadcrumbs="[
-                            { name: 'ビデオをみる', path: '/videos/' },
+                            { name: '録画を見る', path: '/videos/' },
                             { name: '検索結果', path: `/videos/search?query=${encodeURIComponent(query)}` },
                         ]"
                         @update:page="updatePage"
@@ -164,6 +164,16 @@ onMounted(async () => {
         padding: 16px 8px !important;
         padding-top: 8px !important;
     }
+}
+
+/* Vuetifyの v-row の負のマージンで左右にズレるのを抑止 */
+.container-fix :deep(.v-row) {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+.container-fix :deep(.v-col) {
+  padding-left: 0 !important;
+  padding-right: 0 !important;
 }
 
 </style>

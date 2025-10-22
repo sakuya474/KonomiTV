@@ -11,7 +11,7 @@
                     <router-link v-ripple class="navigation__link" active-class="navigation__link--active" to="/videos/"
                         :class="{'navigation__link--active': $route.path.startsWith('/videos')}">
                         <Icon class="navigation__link-icon" icon="fluent:movies-and-tv-20-regular" width="26px" />
-                        <span class="navigation__link-text">ビデオをみる</span>
+                        <span class="navigation__link-text">録画を見る</span>
                     </router-link>
                     <router-link v-ripple class="navigation__link" active-class="navigation__link--active" to="/bd-library/"
                         :class="{'navigation__link--active': $route.path.startsWith('/bd-library')}">

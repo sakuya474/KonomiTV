@@ -8,7 +8,7 @@
         <v-btn class="bottom-navigation-button" to="/videos/"
             :class="{'v-btn--active': $route.path.startsWith('/videos')}">
             <Icon icon="fluent:movies-and-tv-20-regular" width="30px" />
-            <span class="mt-1">ビデオをみる</span>
+            <span class="mt-1">録画を見る</span>
         </v-btn>
         <v-btn class="bottom-navigation-button" to="/bd-library/"
             :class="{'v-btn--active': $route.path.startsWith('/bd-library')}">
