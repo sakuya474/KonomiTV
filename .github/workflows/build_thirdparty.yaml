@@ -47,12 +47,13 @@ env:
   LIBMEDIAINFO_VERSION: '22.09'
   # Akebi HTTPS Server ビルド用の Golang のバージョン
   GOLANG_VERSION: '1.23.8'
-  # ビルド対象の tsreadex・tsreplace・psisiarc・psisimux・Akebi のコミットハッシュ
+  # ビルド対象の tsreadex・psisiarc・psisimux・Akebi のコミットハッシュ
   TSREADEX_COMMIT_HASH: 'eddc8bca0de99627d3867259e7a6e777cbd3b3c6'
-  TSREPLACE_COMMIT_HASH: 'master'
   PSISIARC_COMMIT_HASH: '6593a0f63aedaaecfac7682b51e267874a8ec549'
   PSISIMUX_COMMIT_HASH: '1a01a38886dc41bac81d547ba31fa9eef1bad46b'
   AKEBI_COMMIT_HASH: 'be986980f7a560b4f74eefcfa2cd474f892f3bc7'
+  # tsreplace のバージョン (rigaya 氏のリリースからダウンロード)
+  TSREPLACE_VERSION: '0.16'
 
 # ジョブの定義
 jobs:
@@ -127,20 +128,15 @@ jobs:
       - name: Download and Deploy Encoder Archives
         run: |
 
-          # FFmpeg のアーカイブのダウンロード (dev 版も含む - tsreplace のビルドに必要)
+          # FFmpeg のアーカイブのダウンロード
           curl -LO https://github.com/BtbN/FFmpeg-Builds/releases/download/${{ env.FFMPEG_TAG }}/ffmpeg-n${{ env.FFMPEG_VERSION }}-win64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.zip
           7z x -y ffmpeg-n${{ env.FFMPEG_VERSION }}-win64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.zip
+
+          # thirdparty/FFmpeg/ にランタイムファイルを配置
           mkdir thirdparty/FFmpeg/
           cp ffmpeg-n${{ env.FFMPEG_VERSION }}-win64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/bin/* thirdparty/FFmpeg/
           cp ffmpeg-n${{ env.FFMPEG_VERSION }}-win64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/LICENSE.txt thirdparty/FFmpeg/License.txt
           rm thirdparty/FFmpeg/ffplay.exe
-
-          # FFmpeg の dev 版 (ヘッダーファイルとインポートライブラリ) のダウンロード
-          curl -LO https://github.com/BtbN/FFmpeg-Builds/releases/download/${{ env.FFMPEG_TAG }}/ffmpeg-n${{ env.FFMPEG_VERSION }}-win64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.zip
-          7z x -y ffmpeg-n${{ env.FFMPEG_VERSION }}-win64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.zip
-          mkdir ffmpeg_lgpl/
-          cp -r ffmpeg-n${{ env.FFMPEG_VERSION }}-win64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/include ffmpeg_lgpl/
-          cp -r ffmpeg-n${{ env.FFMPEG_VERSION }}-win64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/lib ffmpeg_lgpl/
 
           # QSVEncC のアーカイブのダウンロード
           curl -LO https://github.com/rigaya/QSVEnc/releases/download/${{ env.QSVENCC_VERSION }}/QSVEncC_${{ env.QSVENCC_VERSION }}_x64.7z
@@ -163,16 +159,13 @@ jobs:
           mv thirdparty/VCEEncC/VCEEncC64.exe thirdparty/VCEEncC/VCEEncC.exe
           curl -L -o thirdparty/VCEEncC/License.txt https://raw.githubusercontent.com/rigaya/VCEEnc/master/VCEEnc_license.txt
 
-      # tsreplace のビルド (FFmpeg の開発ライブラリに依存するため、FFmpeg ダウンロード後にビルド)
-      - name: Build tsreplace
+      # tsreplace のダウンロード (rigaya 氏のリリースから直接ダウンロード)
+      - name: Download tsreplace
         run: |
-          git clone https://github.com/rigaya/tsreplace
-          cd tsreplace/
-          git checkout ${{ env.TSREPLACE_COMMIT_HASH }}
-          msbuild tsreplace.sln /t:Build /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v142
-          mkdir ../thirdparty/tsreplace/
-          cp x64/Release/tsreplace.exe ../thirdparty/tsreplace/tsreplace.exe
-          cp License.txt ../thirdparty/tsreplace/
+          mkdir thirdparty/tsreplace/
+          curl -LO https://github.com/rigaya/tsreplace/releases/download/${{ env.TSREPLACE_VERSION }}/tsreplace_${{ env.TSREPLACE_VERSION }}_x64.7z
+          7z x -y -o"thirdparty/tsreplace" tsreplace_${{ env.TSREPLACE_VERSION }}_x64.7z
+          curl -L -o thirdparty/tsreplace/License.txt https://raw.githubusercontent.com/rigaya/tsreplace/master/License.txt
 
       # Python Standalone Builds のダウンロードと poetry のインストール
       - name: Install Python Standalone Builds & pip & poetry
@@ -398,24 +391,17 @@ jobs:
           rm -rf lib/
           chmod a+x thirdparty/Library/libmediainfo.so*
 
-          # FFmpeg の dev 版 (ヘッダーファイル) をダウンロード (tsreplace のビルドに必要)
-          mkdir ffmpeg_lgpl/
-          cp -r ffmpeg-n${{ env.FFMPEG_VERSION }}-linux64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/include ffmpeg_lgpl/
-          cp -r ffmpeg-n${{ env.FFMPEG_VERSION }}-linux64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/lib ffmpeg_lgpl/
-
-      # tsreplace のビルド (FFmpeg の開発ライブラリに依存するため、FFmpeg ダウンロード後にビルド) (for x64)
-      - name: Build tsreplace (for x64)
+      # tsreplace のダウンロード (rigaya 氏のリリースから直接ダウンロード) (for x64)
+      - name: Download tsreplace (for x64)
         if: matrix.arch == 'amd64'
         run: |
-          git clone https://github.com/rigaya/tsreplace
-          cd tsreplace/
-          git checkout ${{ env.TSREPLACE_COMMIT_HASH }}
-          export PKG_CONFIG_PATH=$(pwd)/../ffmpeg_lgpl/lib/pkgconfig:$PKG_CONFIG_PATH
-          docker run --rm -i -v $(pwd):/work -v $(pwd)/../ffmpeg_lgpl:/ffmpeg_lgpl -w /work -e PKG_CONFIG_PATH=/ffmpeg_lgpl/lib/pkgconfig ubuntu:20.04-custom bash -c './configure && make'
-          mkdir ../thirdparty/tsreplace/
-          cp tsreplace ../thirdparty/tsreplace/tsreplace.elf
-          chmod a+x ../thirdparty/tsreplace/tsreplace.elf
-          cp License.txt ../thirdparty/tsreplace/
+          sudo apt-get install -y p7zip-full
+          mkdir thirdparty/tsreplace/
+          curl -LO https://github.com/rigaya/tsreplace/releases/download/${{ env.TSREPLACE_VERSION }}/tsreplace_${{ env.TSREPLACE_VERSION }}_Ubuntu20.04_amd64.deb
+          7z x -y tsreplace_${{ env.TSREPLACE_VERSION }}_Ubuntu20.04_amd64.deb && tar xvf data.tar
+          cp usr/bin/tsreplace thirdparty/tsreplace/tsreplace.elf
+          chmod a+x thirdparty/tsreplace/tsreplace.elf
+          curl -L -o thirdparty/tsreplace/License.txt https://raw.githubusercontent.com/rigaya/tsreplace/master/License.txt
 
       # FFmpeg・rkmppenc のアーカイブのダウンロードと配置
       # ドライバさえ入っていればスタンドアローンで実行できるように構成を工夫している
@@ -479,24 +465,17 @@ jobs:
           rm -rf lib/
           chmod a+x thirdparty/Library/libmediainfo.so*
 
-          # FFmpeg の dev 版 (ヘッダーファイル) をダウンロード (tsreplace のビルドに必要)
-          mkdir ffmpeg_lgpl/
-          cp -r ffmpeg-n${{ env.FFMPEG_VERSION }}-linuxarm64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/include ffmpeg_lgpl/
-          cp -r ffmpeg-n${{ env.FFMPEG_VERSION }}-linuxarm64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/lib ffmpeg_lgpl/
-
-      # tsreplace のビルド (FFmpeg の開発ライブラリに依存するため、FFmpeg ダウンロード後にビルド) (for arm64)
-      - name: Build tsreplace (for arm64)
+      # tsreplace のダウンロード (rigaya 氏のリリースから直接ダウンロード) (for arm64)
+      - name: Download tsreplace (for arm64)
         if: matrix.arch == 'arm64'
         run: |
-          git clone https://github.com/rigaya/tsreplace
-          cd tsreplace/
-          git checkout ${{ env.TSREPLACE_COMMIT_HASH }}
-          export PKG_CONFIG_PATH=$(pwd)/../ffmpeg_lgpl/lib/pkgconfig:$PKG_CONFIG_PATH
-          docker run --rm -i -v $(pwd):/work -v $(pwd)/../ffmpeg_lgpl:/ffmpeg_lgpl -w /work -e PKG_CONFIG_PATH=/ffmpeg_lgpl/lib/pkgconfig ubuntu:20.04-custom bash -c './configure && make'
-          mkdir ../thirdparty/tsreplace/
-          cp tsreplace ../thirdparty/tsreplace/tsreplace.elf
-          chmod a+x ../thirdparty/tsreplace/tsreplace.elf
-          cp License.txt ../thirdparty/tsreplace/
+          sudo apt-get install -y p7zip-full
+          mkdir thirdparty/tsreplace/
+          curl -LO https://github.com/rigaya/tsreplace/releases/download/${{ env.TSREPLACE_VERSION }}/tsreplace_${{ env.TSREPLACE_VERSION }}_Ubuntu20.04_arm64.deb
+          7z x -y tsreplace_${{ env.TSREPLACE_VERSION }}_Ubuntu20.04_arm64.deb && tar xvf data.tar
+          cp usr/bin/tsreplace thirdparty/tsreplace/tsreplace.elf
+          chmod a+x thirdparty/tsreplace/tsreplace.elf
+          curl -L -o thirdparty/tsreplace/License.txt https://raw.githubusercontent.com/rigaya/tsreplace/master/License.txt
 
       # Python Standalone Builds のダウンロードと poetry のインストール
       - name: Install Python Standalone Builds & pip & poetry
