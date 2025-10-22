@@ -65,10 +65,10 @@ jobs:
           - arch: amd64
             runner: ubuntu-22.04
             artifact_suffix: ''
-          # arm64 アーキテクチャ向けのビルド設定
-          - arch: arm64
-            runner: ubuntu-22.04-arm
-            artifact_suffix: '-ARM'
+          # arm64 アーキテクチャ向けのビルド設定 (現在は無効化)
+          # - arch: arm64
+          #   runner: ubuntu-22.04-arm
+          #   artifact_suffix: '-ARM'
     runs-on: ${{ matrix.runner }}
     steps:
 
