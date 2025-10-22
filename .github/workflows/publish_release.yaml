@@ -75,7 +75,7 @@ jobs:
         with:
           fetch-depth: 0
           path: KonomiTV
-          token: ${{ secrets.GIT_PUSH_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       # KonomiTV のバージョン番号をリリースコミットのコミットメッセージから取得
       - name: Get Version
