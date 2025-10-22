@@ -47,8 +47,9 @@ env:
   LIBMEDIAINFO_VERSION: '22.09'
   # Akebi HTTPS Server ビルド用の Golang のバージョン
   GOLANG_VERSION: '1.23.8'
-  # ビルド対象の tsreadex・psisiarc・psisimux・Akebi のコミットハッシュ
+  # ビルド対象の tsreadex・tsreplace・psisiarc・psisimux・Akebi のコミットハッシュ
   TSREADEX_COMMIT_HASH: 'eddc8bca0de99627d3867259e7a6e777cbd3b3c6'
+  TSREPLACE_COMMIT_HASH: 'master'
   PSISIARC_COMMIT_HASH: '6593a0f63aedaaecfac7682b51e267874a8ec549'
   PSISIMUX_COMMIT_HASH: '1a01a38886dc41bac81d547ba31fa9eef1bad46b'
   AKEBI_COMMIT_HASH: 'be986980f7a560b4f74eefcfa2cd474f892f3bc7'
@@ -79,6 +80,17 @@ jobs:
           mkdir ../thirdparty/tsreadex/
           cp x64/Release/tsreadex.exe ../thirdparty/tsreadex/tsreadex.exe
           cp License.txt ../thirdparty/tsreadex/
+
+      # tsreplace のビルド
+      - name: Build tsreplace
+        run: |
+          git clone https://github.com/rigaya/tsreplace
+          cd tsreplace/
+          git checkout ${{ env.TSREPLACE_COMMIT_HASH }}
+          msbuild tsreplace.sln /t:Build /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v142
+          mkdir ../thirdparty/tsreplace/
+          cp x64/Release/tsreplace.exe ../thirdparty/tsreplace/tsreplace.exe
+          cp License.txt ../thirdparty/tsreplace/
 
       # psisiarc のビルド
       - name: Build psisiarc
@@ -246,6 +258,18 @@ jobs:
           cp tsreadex ../thirdparty/tsreadex/tsreadex.elf
           chmod a+x ../thirdparty/tsreadex/tsreadex.elf
           cp License.txt ../thirdparty/tsreadex/
+
+      # tsreplace のビルド
+      - name: Build tsreplace
+        run: |
+          git clone https://github.com/rigaya/tsreplace
+          cd tsreplace/
+          git checkout ${{ env.TSREPLACE_COMMIT_HASH }}
+          docker run --rm -i -v $(pwd):/work -w /work ubuntu:20.04-custom bash -c 'make'
+          mkdir ../thirdparty/tsreplace/
+          cp tsreplace ../thirdparty/tsreplace/tsreplace.elf
+          chmod a+x ../thirdparty/tsreplace/tsreplace.elf
+          cp License.txt ../thirdparty/tsreplace/
 
       # psisiarc のビルド
       - name: Build psisiarc
