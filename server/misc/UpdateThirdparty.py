@@ -5,34 +5,30 @@
 # 最新版のナイトリービルドをダウンロードする場合は、DOWNLOAD_VERSION に latest を指定する (開発版ではナイトリービルドを推奨)
 # 安定版をダウンロードする場合は、DOWNLOAD_VERSION にバージョン番号を指定する (例: 0.7.1)
 
+import elevate
 import platform
+import py7zr
 import re
+import requests
 import subprocess
 import sys
 import tarfile
 import tempfile
+import typer
 import zipfile
 from pathlib import Path
-from typing import Literal
-
-try:
-    import elevate
-except ImportError:
-    elevate = None
-import py7zr
-import requests
-import typer
 from rich import print
 from rich.padding import Padding
+from rich.progress import Progress
 from rich.progress import (
     BarColumn,
     DownloadColumn,
-    Progress,
     TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
     TransferSpeedColumn,
 )
+from typing import Literal
 
 
 app = typer.Typer()
@@ -53,12 +49,9 @@ def main(
 
     # サードパーティーライブラリのダウンロードベース URL
     if download_version == 'latest':
-        THIRDPARTY_BASE_URL = 'https://nightly.link/tsukumijima/KonomiTV/workflows/build_thirdparty.yaml/master/'
+        THIRDPARTY_BASE_URL = 'https://nightly.link/sakuya474/KonomiTV/workflows/build_thirdparty.yaml/master/'
     else:
-        # フォークされたリポジトリでも動作するように、現在のリポジトリからダウンロード
-        import os
-        github_repository = os.environ.get('GITHUB_REPOSITORY', 'tsukumijima/KonomiTV')
-        THIRDPARTY_BASE_URL = f'https://github.com/{github_repository}/releases/download/v{download_version}/'
+        THIRDPARTY_BASE_URL = f'https://github.com/sakuya474/KonomiTV/releases/download/v{download_version}/'
 
     # ***** 以下はアップデーターのサードパーティーライブラリの更新処理をベースに実装したもの *****
 
@@ -66,12 +59,12 @@ def main(
     is_arm_device = platform.machine() == 'aarch64'
 
     # Linux では elevate で root 権限に昇格 (KonomiTV サーバー自体が root 権限で動作しているため)
-    if platform_type == 'Linux' and elevate is not None:
+    if platform_type == 'Linux':
         elevate.elevate(graphical=False)
 
     # サードパーティーライブラリを随時ダウンロードし、進捗を表示
     # ref: https://github.com/Textualize/rich/blob/master/examples/downloader.py
-    print(Padding('Downloading thirdparty libraries...', (1, 2, 0, 2)))
+    print(Padding('サードパーティーライブラリをダウンロードしています…', (1, 2, 0, 2)))
     progress = Progress(
         TextColumn(' '),
         BarColumn(bar_width=9999),
@@ -108,7 +101,7 @@ def main(
     thirdparty_compressed_file.close()  # 解凍する前に close() してすべて書き込ませておくのが重要
 
     # サードパーティーライブラリを解凍して展開
-    print(Padding('Updating thirdparty libraries... (takes a few seconds)', (1, 2, 0, 2)))
+    print(Padding('サードパーティーライブラリを更新しています… (数秒～数十秒かかります)', (1, 2, 0, 2)))
     progress = Progress(
         TextColumn(' '),
         BarColumn(bar_width=9999),
@@ -132,17 +125,17 @@ def main(
         if platform_type == 'Windows':
             # Windows: 7-Zip 形式のアーカイブを解凍
             with py7zr.SevenZipFile(thirdparty_compressed_file_path, mode='r') as seven_zip:
-                seven_zip.extractall(INSTALLED_DIR / 'thirdparty')
+                seven_zip.extractall(INSTALLED_DIR)
         elif platform_type == 'Linux':
             # Linux: tar.xz 形式のアーカイブを解凍
             ## 7-Zip だと (おそらく) ファイルパーミッションを保持したまま圧縮することができない？ため、あえて tar.xz を使っている
             with tarfile.open(thirdparty_compressed_file_path, mode='r:xz') as tar_xz:
-                tar_xz.extractall(INSTALLED_DIR / 'thirdparty')
+                tar_xz.extractall(INSTALLED_DIR)
         Path(thirdparty_compressed_file_path).unlink()
         if Path(INSTALLED_DIR / 'thirdparty/.gitkeep').exists() is False:
             Path(INSTALLED_DIR / 'thirdparty/.gitkeep').touch()
 
-    print(Padding('Thirdparty libraries updated successfully.', (1, 2, 1, 2)))
+    print(Padding('サードパーティーライブラリを更新しました。', (1, 2, 1, 2)))
 
     def GetEncoderVersion(encoder_name: str) -> None:
         # エンコーダーのバージョン情報を取得する
