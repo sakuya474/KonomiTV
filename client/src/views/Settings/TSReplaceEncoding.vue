@@ -378,7 +378,7 @@
                                         height="6"
                                         rounded
                                     ></v-progress-linear>
-                                    <span class="encoding-task-progress-text">{{ task.progress }}%</span>
+                                    <span class="encoding-task-progress-text">{{ formatProgress(task.progress) }}%</span>
                                 </div>
                                 <div v-if="task.errorMessage" class="encoding-task-error">
                                     <Icon icon="fluent:error-circle-16-filled" width="16px" class="text-error" />
@@ -536,6 +536,10 @@ function formatDateTime(date: Date): string {
         minute: '2-digit',
         second: '2-digit'
     });
+}
+
+function formatProgress(progress: number): string {
+    return progress.toFixed(1);
 }
 
 // エンコードタスクの操作関数
