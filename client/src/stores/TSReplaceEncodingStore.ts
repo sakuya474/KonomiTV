@@ -20,6 +20,7 @@ const useTSReplaceEncodingStore = defineStore('tsreplace-encoding', () => {
     const activeTasks = ref<Map<string, IActiveEncodingTask>>(new Map());
     const webSocket = ref<WebSocket | null>(null);
     const isWebSocketConnected = ref(false);
+    const deletedTasks = ref<Set<string>>(new Set()); // 削除されたタスクIDを追跡
 
     const activeTaskCount = computed(() => {
         return Array.from(activeTasks.value.values()).filter(task =>
@@ -59,7 +60,6 @@ const useTSReplaceEncodingStore = defineStore('tsreplace-encoding', () => {
 
                 // エンコード完了通知の処理
                 if (data.type === 'encoding_complete') {
-                    Message.success(data.message, 8000);
                     console.log('Encoding completed:', data);
 
                     // 完了タスクの情報も更新
@@ -74,7 +74,6 @@ const useTSReplaceEncodingStore = defineStore('tsreplace-encoding', () => {
 
                 // エンコード失敗通知の処理
                 if (data.type === 'encoding_failed') {
-                    Message.error(`${data.message}\nエラー: ${data.error_message}`, 10000);
                     console.log('Encoding failed:', data);
 
                     // 失敗タスクの情報も更新
@@ -90,6 +89,12 @@ const useTSReplaceEncodingStore = defineStore('tsreplace-encoding', () => {
                 // 進捗更新の処理
                 if (data.type === 'progress_update' && Array.isArray(data.tasks)) {
                     for (const taskUpdate of data.tasks) {
+                        // 削除されたタスクは再追加しない
+                        if (deletedTasks.value.has(taskUpdate.task_id)) {
+                            console.log(`Skipping update for deleted task: ${taskUpdate.task_id}`);
+                            continue;
+                        }
+
                         let existingTask = activeTasks.value.get(taskUpdate.task_id);
                         if (!existingTask) {
                             // 新しいタスクの場合は作成
@@ -185,6 +190,8 @@ const useTSReplaceEncodingStore = defineStore('tsreplace-encoding', () => {
 
     const removeTask = (taskId: string) => {
         activeTasks.value.delete(taskId);
+        deletedTasks.value.add(taskId); // 削除されたタスクとして記録
+        console.log(`Task ${taskId} removed from store and marked as deleted`);
     };
 
     const cleanupCompletedTasks = () => {
@@ -196,6 +203,19 @@ const useTSReplaceEncodingStore = defineStore('tsreplace-encoding', () => {
                 (now - task.completedAt.getTime()) > CLEANUP_DELAY) {
                 activeTasks.value.delete(taskId);
             }
+        }
+
+        // 削除されたタスクの記録も一定時間後にクリーンアップ
+        const DELETED_CLEANUP_DELAY = 10 * 60 * 1000; // 10分
+        for (const taskId of deletedTasks.value) {
+            // 削除されたタスクの記録は一定時間後にクリーンアップ
+            // 実際のクリーンアップ時間は削除時刻を記録していないため、
+            // 定期的にクリーンアップする
+        }
+        // 簡易的なクリーンアップ：削除されたタスクの記録を定期的にクリア
+        if (deletedTasks.value.size > 100) {
+            deletedTasks.value.clear();
+            console.log('Cleared deleted tasks tracking set');
         }
     };
 
@@ -221,6 +241,12 @@ const useTSReplaceEncodingStore = defineStore('tsreplace-encoding', () => {
                 // 現在のタスクリストをAPIからの情報で更新
                 const newTasks = new Map<string, IActiveEncodingTask>();
                 for (const taskInfo of allTasks) {
+                    // 削除されたタスクは再追加しない
+                    if (deletedTasks.value.has(taskInfo.task_id)) {
+                        console.log(`Skipping refresh for deleted task: ${taskInfo.task_id}`);
+                        continue;
+                    }
+
                     const task: IActiveEncodingTask = {
                         taskId: taskInfo.task_id,
                         programTitle: taskInfo.video_title,

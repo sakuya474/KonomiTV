@@ -320,27 +320,108 @@
                 </v-text-field>
             </div>
         </div>
+
+        <!-- エンコードタスク表示 -->
+        <div class="settings__content" v-if="server_settings">
+            <div class="settings__content-heading">
+                <Icon icon="fluent:task-list-square-16-filled" width="20px" />
+                <span class="ml-3">エンコードタスク</span>
+            </div>
+            <div class="settings__item">
+                <div class="settings__item-label">
+                    現在実行中および完了したエンコードタスクの一覧です。
+                </div>
+                <div class="encoding-tasks-container">
+                    <div v-if="encodingTasks.length === 0" class="encoding-tasks-empty">
+                        エンコードタスクはありません。
+                    </div>
+                    <div v-else class="encoding-tasks-list">
+                        <div v-for="task in encodingTasks" :key="task.taskId" class="encoding-task-item">
+                            <div class="encoding-task-header">
+                                <div class="encoding-task-title">{{ task.programTitle }}</div>
+                                <div class="encoding-task-actions">
+                                    <v-btn v-if="canCancelTask(task.status)"
+                                        size="x-small"
+                                        variant="flat"
+                                        color="error"
+                                        @click="cancelTask(task.taskId)"
+                                        :loading="cancellingTasks.has(task.taskId)">
+                                        <Icon icon="fluent:stop-20-regular" width="14px" height="14px" />
+                                        <span class="ml-1">キャンセル</span>
+                                    </v-btn>
+                                    <v-btn v-if="canDeleteTask(task.status)"
+                                        size="x-small"
+                                        variant="flat"
+                                        color="grey"
+                                        @click="deleteTask(task.taskId)">
+                                        <Icon icon="fluent:delete-20-regular" width="14px" height="14px" />
+                                        <span class="ml-1">削除</span>
+                                    </v-btn>
+                                    <v-chip
+                                        :color="getStatusColor(task.status)"
+                                        size="small"
+                                        variant="flat"
+                                    >
+                                        {{ getStatusText(task.status) }}
+                                    </v-chip>
+                                </div>
+                            </div>
+                            <div class="encoding-task-details">
+                                <div class="encoding-task-info">
+                                    <span class="encoding-task-codec">{{ task.codec.toUpperCase() }}</span>
+                                    <span class="encoding-task-encoder">{{ getEncoderText(task.encoderType) }}</span>
+                                </div>
+                                <div v-if="task.status === 'processing'" class="encoding-task-progress">
+                                    <v-progress-linear
+                                        :model-value="task.progress"
+                                        color="primary"
+                                        height="6"
+                                        rounded
+                                    ></v-progress-linear>
+                                    <span class="encoding-task-progress-text">{{ task.progress }}%</span>
+                                </div>
+                                <div v-if="task.errorMessage" class="encoding-task-error">
+                                    <Icon icon="fluent:error-circle-16-filled" width="16px" class="text-error" />
+                                    <span class="text-error">{{ task.errorMessage }}</span>
+                                </div>
+                                <div v-if="task.startedAt" class="encoding-task-time">
+                                    開始: {{ formatDateTime(task.startedAt) }}
+                                </div>
+                                <div v-if="task.completedAt" class="encoding-task-time">
+                                    完了: {{ formatDateTime(task.completedAt) }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </SettingsBase>
 </template>
 
 <script setup lang="ts">
 
-import { computed, ref, onMounted } from 'vue';
+import { computed, ref, onMounted, onUnmounted } from 'vue';
 
 import Message from '@/message';
 import Settings from '@/services/Settings';
 import useUserStore from '@/stores/UserStore';
+import useTSReplaceEncodingStore from '@/stores/TSReplaceEncodingStore';
 import Utils from '@/utils/Utils';
 import SettingsBase from '@/views/Settings/Base.vue';
 
 // ストア
 const userStore = useUserStore();
+const encodingStore = useTSReplaceEncodingStore();
 
 // サーバー設定を ref として保持（初期値をnullに設定）
 const server_settings = ref<any>(null);
 
 // ハードウェアエンコーダーの利用可否
 const hardware_encoder_available = ref<boolean>(false);
+
+// キャンセル中のタスクIDを追跡
+const cancellingTasks = ref<Set<string>>(new Set());
 
 // サーバー設定をロード
 async function loadServerSettings() {
@@ -389,12 +470,102 @@ const is_auto_encoding_disabled = computed(() =>
     !server_settings.value?.tsreplace_encoding?.auto_encoding_enabled || is_disabled.value
 );
 
+// エンコードタスク一覧
+const encodingTasks = computed(() => {
+    return encodingStore.getAllTasks().sort((a, b) => {
+        // 実行中 > 待機中 > 完了 > 失敗の順で表示
+        const statusOrder = { 'processing': 0, 'queued': 1, 'completed': 2, 'failed': 3, 'cancelled': 4 };
+        const aOrder = statusOrder[a.status] ?? 5;
+        const bOrder = statusOrder[b.status] ?? 5;
+        if (aOrder !== bOrder) {
+            return aOrder - bOrder;
+        }
+        // 同じステータスの場合は開始時刻でソート（新しい順）
+        if (a.startedAt && b.startedAt) {
+            return b.startedAt.getTime() - a.startedAt.getTime();
+        }
+        return 0;
+    });
+});
+
 // バリデーション
 function validateMaxConcurrentEncodings(value: number): boolean | string {
     if (value < 1 || value > 10) {
         return '1以上10以下の値を入力してください。';
     }
     return true;
+}
+
+// エンコードタスク表示用のヘルパー関数
+function getStatusColor(status: string): string {
+    switch (status) {
+        case 'processing': return 'primary';
+        case 'queued': return 'warning';
+        case 'completed': return 'success';
+        case 'failed': return 'error';
+        case 'cancelled': return 'grey';
+        default: return 'grey';
+    }
+}
+
+function getStatusText(status: string): string {
+    switch (status) {
+        case 'processing': return '実行中';
+        case 'queued': return '待機中';
+        case 'completed': return '完了';
+        case 'failed': return '失敗';
+        case 'cancelled': return 'キャンセル';
+        default: return status;
+    }
+}
+
+function getEncoderText(encoderType: string): string {
+    switch (encoderType) {
+        case 'software': return 'ソフトウェア';
+        case 'hardware': return 'ハードウェア';
+        default: return encoderType;
+    }
+}
+
+function formatDateTime(date: Date): string {
+    return date.toLocaleString('ja-JP', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+    });
+}
+
+// エンコードタスクの操作関数
+function canCancelTask(status: string): boolean {
+    return ['queued', 'processing'].includes(status);
+}
+
+function canDeleteTask(status: string): boolean {
+    return ['completed', 'failed', 'cancelled'].includes(status);
+}
+
+async function cancelTask(taskId: string) {
+    if (cancellingTasks.value.has(taskId)) return;
+
+    cancellingTasks.value.add(taskId);
+    try {
+        const TSReplace = await import('@/services/TSReplace');
+        const success = await TSReplace.default.cancelEncoding(taskId);
+        // キャンセル要求は静かに実行（ポップアップを表示しない）
+    } catch (error) {
+        console.error('Failed to cancel encoding:', error);
+        Message.error('エンコードのキャンセルに失敗しました。');
+    } finally {
+        cancellingTasks.value.delete(taskId);
+    }
+}
+
+function deleteTask(taskId: string) {
+    encodingStore.removeTask(taskId);
+    // ポップアップを表示せずに静かに削除
 }
 
 // サーバー設定を更新する関数
@@ -424,10 +595,121 @@ onMounted(async () => {
         loadServerSettings(),
         checkHardwareEncoderAvailability()
     ]);
+
+    // エンコードストアを初期化
+    encodingStore.initializeWebSocket();
+    encodingStore.startPeriodicCleanup();
+    await encodingStore.refreshEncodingQueue();
+});
+
+// コンポーネントアンマウント時のクリーンアップ
+onUnmounted(() => {
+    // WebSocket接続は他のコンポーネントでも使用される可能性があるため、
+    // ここでは明示的に切断しない
 });
 
 </script>
 
 <style scoped>
-/* 特別なスタイルは不要 - KonomiTVの標準設定スタイルを使用 */
+/* エンコードタスク表示用のスタイル */
+.encoding-tasks-container {
+    margin-top: 16px;
+}
+
+.encoding-tasks-empty {
+    text-align: center;
+    color: rgb(var(--v-theme-on-surface-variant));
+    padding: 24px;
+    font-style: italic;
+}
+
+.encoding-tasks-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.encoding-task-item {
+    border: 1px solid rgb(var(--v-theme-outline-variant));
+    border-radius: 8px;
+    padding: 16px;
+    background: rgb(var(--v-theme-surface));
+}
+
+.encoding-task-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.encoding-task-title {
+    font-weight: 500;
+    font-size: 14px;
+    color: rgb(var(--v-theme-on-surface));
+    flex: 1;
+    margin-right: 12px;
+    word-break: break-word;
+}
+
+.encoding-task-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.encoding-task-details {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.encoding-task-info {
+    display: flex;
+    gap: 12px;
+    font-size: 12px;
+    color: rgb(var(--v-theme-on-surface-variant));
+}
+
+.encoding-task-codec {
+    background: rgb(var(--v-theme-primary-container));
+    color: rgb(var(--v-theme-on-primary-container));
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 500;
+}
+
+.encoding-task-encoder {
+    background: rgb(var(--v-theme-secondary-container));
+    color: rgb(var(--v-theme-on-secondary-container));
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 500;
+}
+
+.encoding-task-progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.encoding-task-progress-text {
+    font-size: 12px;
+    color: rgb(var(--v-theme-on-surface-variant));
+    min-width: 40px;
+    text-align: right;
+}
+
+.encoding-task-error {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+}
+
+.encoding-task-time {
+    font-size: 12px;
+    color: rgb(var(--v-theme-on-surface-variant));
+}
 </style>

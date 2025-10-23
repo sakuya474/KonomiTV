@@ -30,13 +30,20 @@
                 </v-btn>
                 <v-btn v-if="canCancel && isCollapsed"
                     size="x-small"
-                    variant="text"
+                    variant="flat"
                     color="error"
                     @click.stop="cancelEncoding"
                     :loading="isCancelling">
                     <Icon icon="fluent:stop-20-regular" width="14px" height="14px" />
                 </v-btn>
-                <v-btn v-if="isCollapsed" size="x-small" variant="text" @click.stop="hideProgress">
+                <v-btn v-if="canDelete && isCollapsed"
+                    size="x-small"
+                    variant="flat"
+                    color="grey"
+                    @click.stop="deleteTask">
+                    <Icon icon="fluent:delete-20-regular" width="14px" height="14px" />
+                </v-btn>
+                <v-btn v-if="isCollapsed" size="x-small" variant="flat" color="grey" @click.stop="hideProgress">
                     <Icon icon="fluent:dismiss-20-regular" width="14px" height="14px" />
                 </v-btn>
             </div>
@@ -53,14 +60,22 @@
                     <div class="encoding-progress__actions">
                         <v-btn v-if="canCancel"
                             size="small"
-                            variant="text"
+                            variant="flat"
                             color="error"
                             @click="cancelEncoding"
                             :loading="isCancelling">
                             <Icon icon="fluent:stop-20-regular" width="16px" height="16px" />
                             <span class="ml-1">キャンセル</span>
                         </v-btn>
-                        <v-btn size="small" variant="text" @click="hideProgress">
+                        <v-btn v-if="canDelete"
+                            size="small"
+                            variant="flat"
+                            color="grey"
+                            @click="deleteTask">
+                            <Icon icon="fluent:delete-20-regular" width="16px" height="16px" />
+                            <span class="ml-1">削除</span>
+                        </v-btn>
+                        <v-btn size="small" variant="flat" color="grey" @click="hideProgress">
                             <Icon icon="fluent:dismiss-20-regular" width="16px" height="16px" />
                         </v-btn>
                     </div>
@@ -168,6 +183,10 @@ const canCancel = computed(() => {
     return ['queued', 'processing'].includes(status.value) && !isCancelling.value;
 });
 
+const canDelete = computed(() => {
+    return ['completed', 'failed', 'cancelled'].includes(status.value);
+});
+
 const getStatusText = computed(() => {
     switch (status.value) {
         case 'queued': return 'エンコード待機中';
@@ -231,14 +250,20 @@ const cancelEncoding = async () => {
     isCancelling.value = true;
     try {
         const success = await TSReplace.cancelEncoding(props.taskId);
-        if (success) {
-            Message.info('エンコードのキャンセルを要求しました。');
-        }
+        // キャンセル要求は静かに実行（ポップアップを表示しない）
     } catch (error) {
         console.error('Failed to cancel encoding:', error);
         Message.error('エンコードのキャンセルに失敗しました。');
     } finally {
         isCancelling.value = false;
+    }
+};
+
+const deleteTask = () => {
+    if (props.taskId) {
+        store.removeTask(props.taskId);
+        hideProgress();
+        // ポップアップを表示せずに静かに削除
     }
 };
 

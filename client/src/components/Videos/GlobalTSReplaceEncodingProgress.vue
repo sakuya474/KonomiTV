@@ -1,5 +1,6 @@
 <template>
-    <div class="global-encoding-progress" v-if="latestActiveTask">
+    <!-- エンコードプログレスポップアップを非表示にする -->
+    <!-- <div class="global-encoding-progress" v-if="latestActiveTask">
         <TSReplaceEncodingProgress
             :task-id="latestActiveTask.taskId"
             :program-title="latestActiveTask.programTitle"
@@ -10,7 +11,7 @@
             @failed="handleEncodingFailed"
             @cancelled="handleEncodingCancelled"
             @hidden="handleProgressHidden" />
-    </div>
+    </div> -->
 </template>
 
 <script lang="ts" setup>
@@ -34,9 +35,9 @@ const handleEncodingCompleted = (taskId: string) => {
     const task = encodingStore.getTask(taskId);
     encodingStore.updateTaskStatus(taskId, 'completed', 100);
 
-    // 番組名を含む完了通知
-    const programTitle = task?.programTitle || '録画番組';
-    Message.success(`「${programTitle}」のエンコードが完了しました。`);
+    // ポップアップ通知を削除（静かに完了）
+    // const programTitle = task?.programTitle || '録画番組';
+    // Message.success(`「${programTitle}」のエンコードが完了しました。`);
 
     // WebSocket接続をクリーンアップ
     const unsubscriber = progressUnsubscribers.get(taskId);
@@ -50,7 +51,7 @@ const handleEncodingCompleted = (taskId: string) => {
     if (window.location.pathname.startsWith('/videos')) {
         // カスタムイベントを発火して、各ページで録画番組リストの更新を促す
         window.dispatchEvent(new CustomEvent('tsreplace-encoding-completed', {
-            detail: { taskId, programTitle }
+            detail: { taskId, programTitle: task?.programTitle || '録画番組' }
         }));
     }
 };
@@ -60,9 +61,9 @@ const handleEncodingFailed = (taskId: string, error: string) => {
     const task = encodingStore.getTask(taskId);
     encodingStore.updateTaskStatus(taskId, 'failed', undefined, error);
 
-    // 番組名を含むエラー通知
-    const programTitle = task?.programTitle || '録画番組';
-    Message.error(`「${programTitle}」のエンコードが失敗しました: ${error}`);
+    // ポップアップ通知を削除（静かに失敗）
+    // const programTitle = task?.programTitle || '録画番組';
+    // Message.error(`「${programTitle}」のエンコードが失敗しました: ${error}`);
 
     // WebSocket接続をクリーンアップ
     const unsubscriber = progressUnsubscribers.get(taskId);
@@ -77,9 +78,9 @@ const handleEncodingCancelled = (taskId: string) => {
     const task = encodingStore.getTask(taskId);
     encodingStore.updateTaskStatus(taskId, 'cancelled');
 
-    // 番組名を含むキャンセル通知
-    const programTitle = task?.programTitle || '録画番組';
-    Message.warning(`「${programTitle}」のエンコードがキャンセルされました。`);
+    // ポップアップ通知を削除（静かにキャンセル）
+    // const programTitle = task?.programTitle || '録画番組';
+    // Message.warning(`「${programTitle}」のエンコードがキャンセルされました。`);
 
     // WebSocket接続をクリーンアップ
     const unsubscriber = progressUnsubscribers.get(taskId);
