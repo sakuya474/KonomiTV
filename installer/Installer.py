@@ -437,19 +437,66 @@ def Installer(version: str, install_fork: bool) -> None:
         recorded_folders.append(str(recorded_folder_path))
         print(Padding(f'[green]現在指定されている録画フォルダ: {", ".join(recorded_folders)}', (0, 2, 0, 2)))
 
-    # ***** アップロードしたキャプチャ画像の保存先フォルダのパス *****
-
+    # ***** BDライブラリの設定 *****
     table_07 = CreateTable()
-    table_07.add_column('07. アップロードしたキャプチャ画像の保存先フォルダのパスを入力してください。')
-    table_07.add_row('クライアントの [キャプチャの保存先] 設定で [KonomiTV サーバーにアップロード] または')
-    table_07.add_row('[ブラウザでのダウンロードと、KonomiTV サーバーへのアップロードを両方行う] を選択したときに利用されます。')
+    table_07.add_column('07. BDライブラリの設定')
+    table_07.add_row('BDライブラリの保存先フォルダを設定してください。')
+    table_07.add_row('BDライブラリは、Blu-ray Disc の映像データを保存するために使用されます。')
     if platform_type == 'Windows':
-        table_07.add_row('入力例: E:\\TV-Capture')
+        table_07.add_row('入力例: E:\\BD-Library')
     elif platform_type == 'Linux' or platform_type == 'Linux-Docker':
-        table_07.add_row('入力例: /mnt/hdd/TV-Capture')
+        table_07.add_row('入力例: /mnt/hdd/BD-Library')
     table_07.add_row('複数のフォルダを指定するには、パスを1つずつ入力してください。')
     table_07.add_row('入力を終了する場合は、何も入力せずに Enter キーを押してください。')
     print(Padding(table_07, (1, 2, 1, 2)))
+
+    # BDライブラリの保存フォルダのリスト
+    bd_library_folders: list[str] = []
+
+    # BDライブラリフォルダを1つずつ入力
+    while True:
+        # 入力プロンプト (バリデーションに失敗し続ける限り何度でも表示される)
+        bd_library_folder = CustomPrompt.ask('BDライブラリの保存先フォルダのパス')
+
+        # 何も入力されなかった場合は入力を終了
+        if bd_library_folder == '':
+            # 1つも入力されていない場合は再度入力を促す
+            if len(bd_library_folders) == 0:
+                print(Padding('[red]少なくとも1つのBDライブラリの保存先フォルダを指定してください。', (0, 2, 0, 2)))
+                continue
+            break
+
+        # 入力されたパスを Path オブジェクトに変換
+        bd_library_folder_path = Path(bd_library_folder)
+
+        # バリデーション
+        if bd_library_folder_path.is_absolute() is False:
+            print(Padding('[red]BDライブラリの保存先フォルダは絶対パスで入力してください。', (0, 2, 0, 2)))
+            continue
+        if bd_library_folder_path.exists() is False:
+            print(Padding('[red]指定されたBDライブラリの保存先フォルダが存在しません。', (0, 2, 0, 2)))
+            continue
+        if bd_library_folder_path.is_dir() is False:
+            print(Padding('[red]指定されたパスはフォルダではありません。', (0, 2, 0, 2)))
+            continue
+
+        # 現在指定されているフォルダの一覧を表示
+        bd_library_folders.append(str(bd_library_folder_path))
+        print(Padding(f'[green]現在指定されているBDライブラリの保存先フォルダ: {", ".join(bd_library_folders)}', (0, 2, 0, 2)))
+
+    # ***** アップロードしたキャプチャ画像の保存先フォルダのパス *****
+
+    table_08 = CreateTable()
+    table_08.add_column('08. アップロードしたキャプチャ画像の保存先フォルダのパスを入力してください。')
+    table_08.add_row('クライアントの [キャプチャの保存先] 設定で [KonomiTV サーバーにアップロード] または')
+    table_08.add_row('[ブラウザでのダウンロードと、KonomiTV サーバーへのアップロードを両方行う] を選択したときに利用されます。')
+    if platform_type == 'Windows':
+        table_08.add_row('入力例: E:\\TV-Capture')
+    elif platform_type == 'Linux' or platform_type == 'Linux-Docker':
+        table_08.add_row('入力例: /mnt/hdd/TV-Capture')
+    table_08.add_row('複数のフォルダを指定するには、パスを1つずつ入力してください。')
+    table_08.add_row('入力を終了する場合は、何も入力せずに Enter キーを押してください。')
+    print(Padding(table_08, (1, 2, 1, 2)))
 
     # キャプチャ画像の保存フォルダのリスト
     capture_upload_folders: list[str] = []
@@ -486,73 +533,26 @@ def Installer(version: str, install_fork: bool) -> None:
         print(Padding(f'[green]現在指定されているキャプチャ画像の保存先フォルダ: {", ".join(capture_upload_folders)}', (0, 2, 0, 2)))
 
     # ***** Discord連携に必要なトークン *****
-    table_08 = CreateTable()
-    table_08.add_column('08. Discord 連携を有効にしますか？')
-    table_08.add_row('別途 Discord Bot の作成と、作成した Bot を Discord サーバーに招待する必要があります。')
-    table_08.add_row('詳しくは [bright_blue]https://github.com/mori2163/KonomiTV/wiki/Discord[/bright_blue] をご覧ください。')
-    print(Padding(table_08, (1, 2, 1, 2)))
+    table_09 = CreateTable()
+    table_09.add_column('09. Discord 連携を有効にしますか？')
+    table_09.add_row('別途 Discord Bot の作成と、作成した Bot を Discord サーバーに招待する必要があります。')
+    table_09.add_row('詳しくは [bright_blue]https://github.com/mori2163/KonomiTV/wiki/Discord[/bright_blue] をご覧ください。')
+    print(Padding(table_09, (1, 2, 1, 2)))
 
     # Discord 連携を有効にするか
     is_discord_integration_enabled = bool(CustomConfirm.ask('Discord 連携を有効にする', default=False))
     discord_bot_token = ''
 
     if is_discord_integration_enabled:
-        table_08_1 = CreateTable()
-        table_08_1.add_column('08-1. Discord Bot Token を入力してください。')
-        table_08_1.add_row('Discord Developer Portal で作成した Bot のトークンを入力します。')
-        print(Padding(table_08_1, (1, 2, 1, 2)))
+        table_09_1 = CreateTable()
+        table_09_1.add_column('09-1. Discord Bot Token を入力してください。')
+        table_09_1.add_row('Discord Developer Portal で作成した Bot のトークンを入力します。')
+        print(Padding(table_09_1, (1, 2, 1, 2)))
         while True:
             discord_bot_token = CustomPrompt.ask('Discord Bot Token')
             if discord_bot_token:
                 break
             print(Padding('[red]Discord Bot Token を入力してください。', (0, 2, 0, 2)))
-
-    # ***** BDライブラリの設定 *****
-    table_09 = CreateTable()
-    table_09.add_column('09. BDライブラリの設定')
-    table_09.add_row('BDライブラリの保存先フォルダを設定してください。')
-    table_09.add_row('BDライブラリは、Blu-ray Disc の映像データを保存するために使用されます。')
-    if platform_type == 'Windows':
-        table_09.add_row('入力例: E:\\BD-Library')
-    elif platform_type == 'Linux' or platform_type == 'Linux-Docker':
-        table_09.add_row('入力例: /mnt/hdd/BD-Library')
-    table_09.add_row('複数のフォルダを指定するには、パスを1つずつ入力してください。')
-    table_09.add_row('入力を終了する場合は、何も入力せずに Enter キーを押してください。')
-    print(Padding(table_09, (1, 2, 1, 2)))
-
-    # BDライブラリの保存フォルダのリスト
-    bd_library_folders: list[str] = []
-
-    # BDライブラリフォルダを1つずつ入力
-    while True:
-        # 入力プロンプト (バリデーションに失敗し続ける限り何度でも表示される)
-        bd_library_folder = CustomPrompt.ask('BDライブラリの保存先フォルダのパス')
-
-        # 何も入力されなかった場合は入力を終了
-        if bd_library_folder == '':
-            # 1つも入力されていない場合は再度入力を促す
-            if len(bd_library_folders) == 0:
-                print(Padding('[red]少なくとも1つのBDライブラリの保存先フォルダを指定してください。', (0, 2, 0, 2)))
-                continue
-            break
-
-        # 入力されたパスを Path オブジェクトに変換
-        bd_library_folder_path = Path(bd_library_folder)
-
-        # バリデーション
-        if bd_library_folder_path.is_absolute() is False:
-            print(Padding('[red]BDライブラリの保存先フォルダは絶対パスで入力してください。', (0, 2, 0, 2)))
-            continue
-        if bd_library_folder_path.exists() is False:
-            print(Padding('[red]指定されたBDライブラリの保存先フォルダが存在しません。', (0, 2, 0, 2)))
-            continue
-        if bd_library_folder_path.is_dir() is False:
-            print(Padding('[red]指定されたパスはフォルダではありません。', (0, 2, 0, 2)))
-            continue
-
-        # 現在指定されているフォルダの一覧を表示
-        bd_library_folders.append(str(bd_library_folder_path))
-        print(Padding(f'[green]現在指定されているBDライブラリの保存先フォルダ: {", ".join(bd_library_folders)}', (0, 2, 0, 2)))
 
     # ***** ソースコードのダウンロード *****
 
@@ -570,7 +570,7 @@ def Installer(version: str, install_fork: bool) -> None:
         else:
             git_url = 'https://github.com/tsukumijima/KonomiTV.git'
             branch = 'master'  # 本家はmasterブランチから
-        
+
         result = RunSubprocess(
             'KonomiTV のソースコードを Git でダウンロードしています…',
             #releaseブランチまたはmasterブランチからダウンロード
@@ -603,7 +603,7 @@ def Installer(version: str, install_fork: bool) -> None:
                 source_code_response = requests.get('https://codeload.github.com/tsukumijima/KonomiTV/zip/refs/heads/master')
             else:
                 source_code_response = requests.get(f'https://codeload.github.com/tsukumijima/KonomiTV/zip/refs/tags/v{version}')
-        
+
         # ダウンロードが成功したかチェック
         if source_code_response.status_code != 200:
             print(Padding('', (1, 2, 0, 2)))
@@ -611,7 +611,7 @@ def Installer(version: str, install_fork: bool) -> None:
             print(Padding(f'[yellow]HTTP Status Code: {source_code_response.status_code}[/yellow]', (0, 2, 0, 2)))
             print(Padding('[yellow]指定されたバージョンが存在しないか、ネットワークエラーが発生した可能性があります。[/yellow]', (0, 2, 1, 2)))
             return
-        
+
         task_id = progress.add_task('', total=None)
 
         # ダウンロードしたデータを随時一時ファイルに書き込む
@@ -694,9 +694,9 @@ def Installer(version: str, install_fork: bool) -> None:
         config_dict['general']['encoder'] = encoder
         config_dict['server']['port'] = server_port
         config_dict['video']['recorded_folders'] = recorded_folders
+        config_dict['video']['bd_library_folders'] = bd_library_folders
         config_dict['capture']['upload_folders'] = capture_upload_folders
         config_dict['discord']['token'] = discord_bot_token
-        config_dict['video']['bd_library_folders'] = bd_library_folders
 
         # サーバー設定データを保存
         SaveConfig(install_path / 'config.yaml', config_dict)
@@ -1125,33 +1125,33 @@ def Installer(version: str, install_fork: bool) -> None:
             text = True,  # 出力をテキストとして取得する
         ).stdout.strip()
 
-        table_09 = CreateTable()
-        table_09.add_column('09. KonomiTV の Windows サービスの実行ユーザー名を入力してください。')
-        table_09.add_row('KonomiTV の Windows サービスを一般ユーザーの権限で起動するために利用します。')
-        table_09.add_row('ほかのユーザー権限で実行したい場合は、そのユーザー名を入力してください。')
-        table_09.add_row(f'Enter キーを押すと、現在ログオン中のユーザー ({current_user_name_default}) が利用されます。')
-        print(Padding(table_09, (0, 2, 0, 2)))
+        table_10 = CreateTable()
+        table_10.add_column('10. KonomiTV の Windows サービスの実行ユーザー名を入力してください。')
+        table_10.add_row('KonomiTV の Windows サービスを一般ユーザーの権限で起動するために利用します。')
+        table_10.add_row('ほかのユーザー権限で実行したい場合は、そのユーザー名を入力してください。')
+        table_10.add_row(f'Enter キーを押すと、現在ログオン中のユーザー ({current_user_name_default}) が利用されます。')
+        print(Padding(table_10, (0, 2, 0, 2)))
 
         # ユーザー名を入力
         current_user_name: str = CustomPrompt.ask('KonomiTV の Windows サービスの実行ユーザー名', default=current_user_name_default)
 
-        table_10 = CreateTable()
-        table_10.add_column(f'10. ユーザー ({current_user_name}) のパスワードを入力してください。')
-        table_10.add_row('KonomiTV の Windows サービスを一般ユーザーの権限で起動するために利用します。')
-        table_10.add_row('入力されたパスワードがそれ以外の用途に利用されることはありません。')
-        table_10.add_row('間違ったパスワードを入力すると、KonomiTV が起動できなくなります。')
-        table_10.add_row('Enter キーを押す前に、正しいパスワードかどうか今一度確認してください。')
-        table_10.add_row('なお、PIN などのほかの認証方法には対応していません。')
-        table_10.add_row(CreateRule())
-        table_10.add_row('ログオン中のユーザーにパスワードを設定していない場合は、簡単なものでいいので')
-        table_10.add_row('何かパスワードを設定してから、その設定したパスワードを入力してください。')
-        table_10.add_row('なお、パスワードの設定後にインストーラーを起動し直す必要はありません。')
-        table_10.add_row(CreateRule())
-        table_10.add_row('ごく稀に、正しいパスワードを指定したのにログオンできない場合があります。')
-        table_10.add_row('その場合は、一度インストーラーを Ctrl+C で中断し、インストーラーの')
-        table_10.add_row('実行ファイルを Shift + 右クリック → [別のユーザーとして実行] から、')
-        table_10.add_row('ログオン中のユーザーとパスワードを指定して再度実行してみてください。')
-        print(Padding(table_10, (1, 2, 1, 2)))
+        table_11 = CreateTable()
+        table_11.add_column(f'11. ユーザー ({current_user_name}) のパスワードを入力してください。')
+        table_11.add_row('KonomiTV の Windows サービスを一般ユーザーの権限で起動するために利用します。')
+        table_11.add_row('入力されたパスワードがそれ以外の用途に利用されることはありません。')
+        table_11.add_row('間違ったパスワードを入力すると、KonomiTV が起動できなくなります。')
+        table_11.add_row('Enter キーを押す前に、正しいパスワードかどうか今一度確認してください。')
+        table_11.add_row('なお、PIN などのほかの認証方法には対応していません。')
+        table_11.add_row(CreateRule())
+        table_11.add_row('ログオン中のユーザーにパスワードを設定していない場合は、簡単なものでいいので')
+        table_11.add_row('何かパスワードを設定してから、その設定したパスワードを入力してください。')
+        table_11.add_row('なお、パスワードの設定後にインストーラーを起動し直す必要はありません。')
+        table_11.add_row(CreateRule())
+        table_11.add_row('ごく稀に、正しいパスワードを指定したのにログオンできない場合があります。')
+        table_11.add_row('その場合は、一度インストーラーを Ctrl+C で中断し、インストーラーの')
+        table_11.add_row('実行ファイルを Shift + 右クリック → [別のユーザーとして実行] から、')
+        table_11.add_row('ログオン中のユーザーとパスワードを指定して再度実行してみてください。')
+        print(Padding(table_11, (1, 2, 1, 2)))
 
         # ユーザーのパスワードを取得
         while True:
