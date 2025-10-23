@@ -81,33 +81,6 @@
             </div>
         </main>
 
-        <!-- EPG操作ボタン（浮動表示） -->
-        <div class="epg-controls-floating">
-            <v-btn
-                @click="updateEPG"
-                :loading="timetableStore.is_loading"
-                :disabled="timetableStore.is_loading"
-                color="primary"
-                variant="tonal"
-                size="large"
-                class="epg-btn"
-            >
-                <v-icon icon="mdi-download" class="mr-1" size="large" />
-                <span>EPG取得</span>
-            </v-btn>
-            <v-btn
-                @click="reloadEPG"
-                :loading="timetableStore.is_loading"
-                :disabled="timetableStore.is_loading"
-                color="secondary"
-                variant="tonal"
-                size="large"
-                class="epg-btn"
-            >
-                <v-icon icon="mdi-refresh" class="mr-1" size="large" />
-                <span>EPG再読み込み</span>
-            </v-btn>
-        </div>
 
         <!-- 番組詳細サイドパネル -->
         <v-navigation-drawer v-model="is_panel_shown" location="right" temporary width="600">
@@ -333,26 +306,6 @@ const reserveProgram = async (program_id: string) => {
     is_reserving.value = false;
 };
 
-// EPG操作メソッド
-const updateEPG = async () => {
-    try {
-        await timetableStore.updateEPG();
-        snackbarsStore.show('success', 'EPG 取得を開始しました。');
-    } catch (error) {
-        snackbarsStore.show('error', 'EPG 取得に失敗しました。EDCBが起動していることを確認してください。');
-        console.error('EPG 取得エラー:', error);
-    }
-};
-
-const reloadEPG = async () => {
-    try {
-        await timetableStore.reloadEPG();
-        snackbarsStore.show('success', 'EPG を再読み込みしました。');
-    } catch (error) {
-        snackbarsStore.show('error', 'EPG の再読み込みに失敗しました。EDCBが起動していることを確認してください。');
-        console.error('EPG再読み込みエラー:', error);
-    }
-};
 
 onMounted(() => {
     timetableStore.fetchTimetable();
@@ -371,11 +324,11 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
             const current_hours = now.value.getHours();
             const current_minutes = now.value.getMinutes();
 
-            //経過分数を計算(ただし、現在時刻の一時間前にして余裕をもたせる)
-            const minutes_from_4am = ((current_hours - 4 + 24 - 1) % 24) * 60 + current_minutes;
+            //経過分数を計算(4時からの経過分数)
+            const minutes_from_4am = ((current_hours - 4 + 24) % 24) * 60 + current_minutes;
 
-            // 1分あたり2pxでスクロール量を計算
-            const scroll_top = (minutes_from_4am * 2) - 50;
+            // 1分あたり6pxでスクロール量を計算（赤いラインと同じ）
+            const scroll_top = (minutes_from_4am * 6) - 200;
 
             // スクロールさせる
             container.scrollTo({
@@ -767,42 +720,5 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
     margin-top: 16px;
 }
 
-.epg-controls-floating {
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    z-index: 100;
-    display: flex;
-    flex-direction: row;
-
-    .epg-btn:not(:last-child) {
-        margin-right: 12px;
-    }
-
-    @include smartphone-vertical {
-        bottom: calc(56px + env(safe-area-inset-bottom, 0px) + 16px);
-        right: 16px;
-        flex-direction: column;
-        gap: 8px;
-    }
-
-    .epg-btn {
-        min-width: 140px;
-        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
-        background-color: rgb(var(--v-theme-surface)) !important;
-        border: 1px solid rgb(var(--v-theme-outline-variant)) !important;
-
-        &:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.3);
-            background-color: rgb(var(--v-theme-surface-variant)) !important;
-        }
-
-        @include smartphone-vertical {
-            width: 140px;
-            font-size: 0.95em;
-        }
-    }
-}
 
 </style>
