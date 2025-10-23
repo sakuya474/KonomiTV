@@ -352,6 +352,9 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
     @include smartphone-vertical {
         margin-left: 0px;
         margin-right: 0px;
+        padding-top: 0px;
+        // スマホ表示ではHeaderBarとNavigationを非表示にする
+        margin-top: 0px;
     }
 }
 
@@ -361,6 +364,13 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
     padding-top: 5px;
     background: rgb(var(--v-theme-background));
     z-index: 10;
+
+    @include smartphone-vertical {
+        position: relative; // スマホ表示では相対位置に変更
+        top: 0px;
+        padding-top: 0px;
+        margin-top: 0px;
+    }
 
     &__date-control {
         display: flex;
@@ -427,6 +437,11 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
 
 .timetable-body {
     height: calc(100vh - 65px - 140px);
+
+    @include smartphone-vertical {
+        height: calc(100vh - 62px - 200px); // スマホ表示での適切な高さに調整
+        min-height: 400px; // 最小高さを設定
+    }
 }
 
 .loading-container {
@@ -443,6 +458,12 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
     grid-template-rows: auto 1fr;
     grid-template-columns: auto 1fr;
     overflow: scroll;
+
+    @include smartphone-vertical {
+        // スマホ表示ではレイアウトを最適化
+        grid-template-rows: auto auto 1fr;
+        gap: 0px;
+    }
 }
 
 .corner-cell {
@@ -460,6 +481,12 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
     top: 0;
     z-index: 5;
     background: rgb(var(--v-theme-background));
+
+    @include smartphone-vertical {
+        position: relative; // スマホ表示では相対位置に変更
+        top: 0px;
+        margin-top: 0px;
+    }
 
     .channel-header-cell {
         padding: 12px 8px;
