@@ -193,6 +193,27 @@ previously_recording: set[int] = set()
 previous_reservations: dict[int, 'schemas.Reservation'] = {}
 
 
+async def scan_bd_library():
+    """BDライブラリをスキャンしてデータベースに登録する"""
+    try:
+        # BDライブラリスキャンを実行
+        from misc.BDLibraryScanner import scan_async, load_bd_folders_from_config
+
+        # 設定からBDライブラリフォルダを取得
+        bd_folders = load_bd_folders_from_config()
+
+        if not bd_folders:
+            logging.info('[BDLibraryScanner] No BD library folders configured, skipping scan.')
+            return
+
+        logging.info(f'[BDLibraryScanner] Starting BD library scan for folders: {bd_folders}')
+        await scan_async(bd_folders)
+        logging.info('[BDLibraryScanner] BD library scan completed successfully.')
+
+    except Exception as e:
+        logging.error(f'[BDLibraryScanner] Error during BD library scan: {e}', exc_info=True)
+
+
 async def check_and_notify_reservations():
     """予約の開始時刻と終了時刻をチェックし、通知が必要な場合はDiscordに通知を送信する"""
     try:
@@ -351,6 +372,10 @@ async def Startup():
     # ref: https://docs.astral.sh/ruff/rules/asyncio-dangling-task/
     recorded_scan_task = RecordedScanTask()
     await recorded_scan_task.start()
+
+    # BDライブラリスキャンを起動時に実行
+    logging.info('BD Library Scanner starting...')
+    asyncio.create_task(scan_bd_library())
 
     # Discord Bot をバックグラウンドタスクとして起動する
     logging.info('Discord Bot starting...')
