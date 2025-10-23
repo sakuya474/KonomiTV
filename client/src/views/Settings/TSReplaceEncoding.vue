@@ -644,12 +644,13 @@ onUnmounted(() => {
 }
 
 .encoding-task-title {
-    font-weight: 500;
+    font-weight: 600;
     font-size: 14px;
     color: rgb(var(--v-theme-on-surface));
     flex: 1;
     margin-right: 12px;
     word-break: break-word;
+    line-height: 1.4;
 }
 
 .encoding-task-actions {
@@ -669,7 +670,7 @@ onUnmounted(() => {
     display: flex;
     gap: 12px;
     font-size: 12px;
-    color: rgb(var(--v-theme-on-surface-variant));
+    color: rgb(var(--v-theme-on-surface));
 }
 
 .encoding-task-codec {
@@ -696,9 +697,10 @@ onUnmounted(() => {
 
 .encoding-task-progress-text {
     font-size: 12px;
-    color: rgb(var(--v-theme-on-surface-variant));
+    color: rgb(var(--v-theme-on-surface));
     min-width: 40px;
     text-align: right;
+    font-weight: 500;
 }
 
 .encoding-task-error {
@@ -710,6 +712,7 @@ onUnmounted(() => {
 
 .encoding-task-time {
     font-size: 12px;
-    color: rgb(var(--v-theme-on-surface-variant));
+    color: rgb(var(--v-theme-on-surface));
+    font-weight: 500;
 }
 </style>
