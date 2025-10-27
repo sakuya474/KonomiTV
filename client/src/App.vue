@@ -143,8 +143,15 @@ body header + main {
 
 // ルートコンテナ
 body .route-container {
+    width: 100%;
     height: 100%;
     background: rgb(var(--v-theme-background));
+
+    main {
+        display: flex;
+        width: 100%;
+        height: 100%;
+    }
 }
 
 // ツールチップのスタイル

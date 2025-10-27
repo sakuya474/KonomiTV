@@ -255,8 +255,8 @@ class Program(TortoiseModel):
                     # 番組長（秒）
                     duration = float((program_info.get('endAt', 0) - program_info.get('startAt', 0)) / 1000)
 
-                    # 番組終了時刻が現在時刻より1時間以上前な番組を弾く
-                    if datetime.now(ZoneInfo('Asia/Tokyo')) - end_time > timedelta(hours=1):
+                    # 番組終了時刻が現在時刻より1週間以上前な番組を弾く
+                    if datetime.now(ZoneInfo('Asia/Tokyo')) - end_time > timedelta(days=7):
                         continue
 
                     # ***** ここからは 追加・更新・更新不要 のいずれか *****
@@ -492,8 +492,8 @@ class Program(TortoiseModel):
                     start_time = MillisecondToDatetime(program_info['startAt'])
                     end_time = MillisecondToDatetime(program_info['startAt'] + program_info['duration'])
 
-                    # 番組終了時刻が現在時刻より1時間以上前な番組を弾く
-                    if datetime.now(ZoneInfo('Asia/Tokyo')) - end_time > timedelta(hours=1):
+                    # 番組終了時刻が現在時刻より1週間以上前な番組を弾く
+                    if datetime.now(ZoneInfo('Asia/Tokyo')) - end_time > timedelta(days=7):
                         continue
 
                     # ***** ここからは 追加・更新・更新不要 のいずれか *****
@@ -717,11 +717,36 @@ class Program(TortoiseModel):
                 edcb = CtrlCmdUtil()
                 edcb.setConnectTimeOutSec(10)  # 10秒後にタイムアウト (SPHD や CATV も映る環境だと時間がかかるので、少し伸ばす)
 
-                # 開始時間未定をのぞく全番組を取得する (リスト引数の前2要素は全番組、残り2要素は全期間を意味)
+                from datetime import timezone
+                jst_timezone = timezone(timedelta(hours=9))
+                now = datetime.now(CtrlCmdUtil.TZ)
+
+                # 現在時刻から未来のすべての番組を取得する（全期間指定）
+                # 第3引数=1（最小値）、第4引数=0x7fffffffffffffff（最大値）で全期間を指定
                 service_event_info_list = await edcb.sendEnumPgInfoEx([0xffffffffffff, 0xffffffffffff, 1, 0x7fffffffffffffff])
                 if service_event_info_list is None:
                     logging.error('Failed to get programs from EDCB.')
                     raise Exception('Failed to get programs from EDCB.')
+
+                # 取得した未来の番組数をカウント
+                future_program_count = sum(len(service_event_info.get('event_list', [])) for service_event_info in service_event_info_list)
+                logging.info(f'Retrieved {len(service_event_info_list)} service groups with {future_program_count} future programs from EDCB.')
+
+                # 過去1週間分の番組情報を取得して追加する（番組表で前後1週間分を表示するため）
+                # sendEnumPgArc は過去番組情報を取得する API
+                arc_start_time = now - timedelta(days=7)
+                arc_end_time = now
+                arc_start_filetime = EDCBUtil.datetimeToFileTime(arc_start_time, jst_timezone)
+                arc_end_filetime = EDCBUtil.datetimeToFileTime(arc_end_time, jst_timezone)
+
+                service_event_info_list_arc = await edcb.sendEnumPgArc([0xffffffffffff, 0xffffffffffff, arc_start_filetime, arc_end_filetime])
+                if service_event_info_list_arc is not None:
+                    # 取得した過去の番組数をカウント
+                    past_program_count = sum(len(service_event_info.get('event_list', [])) for service_event_info in service_event_info_list_arc)
+                    logging.info(f'Retrieved {len(service_event_info_list_arc)} service groups with {past_program_count} past programs from EDCB.')
+
+                    # 過去番組情報を既存のリストに追加（重複は後続処理で自動的に除外される）
+                    service_event_info_list.extend(service_event_info_list_arc)
 
                 # この変数から更新or更新不要な番組情報を削除していき、残った古い番組情報を最後にまとめて削除する
                 duplicate_programs = {temp.id:temp for temp in await Program.all()}
@@ -796,8 +821,8 @@ class Program(TortoiseModel):
                         ## 終了時間未定の場合、とりあえず5分とする
                         end_time = start_time + timedelta(seconds=event_info.get('duration_sec', 300))
 
-                        # 番組終了時刻が現在時刻より1時間以上前な番組を弾く
-                        if datetime.now(CtrlCmdUtil.TZ) - end_time > timedelta(hours=1):
+                        # 番組終了時刻が現在時刻より1週間以上前な番組を弾く
+                        if datetime.now(CtrlCmdUtil.TZ) - end_time > timedelta(days=7):
                             continue
 
                         # ***** ここからは 追加・更新・更新不要 のいずれか *****

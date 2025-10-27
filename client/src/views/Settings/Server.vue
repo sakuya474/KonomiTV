@@ -444,6 +444,7 @@ import Maintenance from '@/services/Maintenance';
 import Settings, { IServerSettings, IServerSettingsDefault } from '@/services/Settings';
 import Version from '@/services/Version';
 import useUserStore from '@/stores/UserStore';
+import useTimetableStore from '@/stores/TimetableStore';
 import Utils from '@/utils';
 import SettingsBase from '@/views/Settings/Base.vue';
 
@@ -458,6 +459,9 @@ user_store.fetchUser().then((user) => {
         is_disabled.value = false;
     }
 });
+
+// 番組表ストアを取得
+const timetableStore = useTimetableStore();
 
 // サーバー設定を取得
 const server_settings = ref<IServerSettings>(structuredClone(IServerSettingsDefault));
@@ -511,7 +515,9 @@ const server_log_dialog = ref(false);
 async function updateDatabase() {
     Message.show('データベースを更新しています...');
     await Maintenance.updateDatabase();
-    Message.success('データベースを更新しました。');
+    // データベース更新後に番組表も再取得
+    await timetableStore.fetchTimetable();
+    Message.success('データベースを更新しました。番組表も再取得しました。');
 }
 
 // BDライブラリフォルダの一括スキャンを実行する関数

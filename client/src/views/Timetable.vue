@@ -5,6 +5,12 @@
             <Navigation />
             <div class="timetable-container-wrapper">
                 <SPHeaderBar />
+                <div class="timetable-breadcrumbs-container">
+                    <Breadcrumbs :crumbs="[
+                        { name: 'ホーム', path: '/' },
+                        { name: '番組表', path: '/timetable/', disabled: true },
+                    ]" />
+                </div>
                 <!-- ヘッダー: チャンネルタブ & 日付操作 -->
                 <div class="timetable-header">
                     <div class="channels-tab">
@@ -21,9 +27,29 @@
                         </div>
                     </div>
                     <div class="timetable-header__date-control">
-                        <v-btn @click="timetableStore.setPreviousDate" class="mr-2">昨日</v-btn>
-                        <v-btn @click="timetableStore.setCurrentDate" class="mx-2">今日</v-btn>
-                        <v-btn @click="timetableStore.setNextDate" class="ml-2">明日</v-btn>
+                        <v-btn variant="flat" icon @click="onClickDateArrow(-1)">
+                            <v-icon>mdi-chevron-left</v-icon>
+                        </v-btn>
+                        <v-menu v-model="is_date_menu_shown" :close-on-content-click="false">
+                            <template v-slot:activator="{ props }">
+                                <v-btn variant="flat" v-bind="props" class="date-button">
+                                    {{ formatDateLabel(selected_date) }}
+                                </v-btn>
+                            </template>
+                            <v-list class="date-list">
+                                <v-list-item
+                                    v-for="date in dateList"
+                                    :key="date.value"
+                                    @click="onSelectDate(date.offset)"
+                                    :class="{ 'date-list-item--selected': date.offset === timetableStore.selected_day_offset }"
+                                >
+                                    <v-list-item-title>{{ date.label }}</v-list-item-title>
+                                </v-list-item>
+                            </v-list>
+                        </v-menu>
+                        <v-btn variant="flat" icon @click="onClickDateArrow(1)">
+                            <v-icon>mdi-chevron-right</v-icon>
+                        </v-btn>
                     </div>
                 </div>
 
@@ -40,14 +66,17 @@
                             </div>
                         </div>
                         <div class="timeline-container">
-                            <div v-for="hour in 25" :key="hour" class="hour-label">
-                                <span class="hour-text">{{ (hour + 3) % 24 }}</span>
+                            <div v-for="(label, index) in timelineLabels" :key="index" class="hour-label">
+                                <div v-if="label.day !== null" class="day-text">{{ label.day }}</div>
+                                <div v-if="label.day !== null" class="dayofweek-text">日</div>
+                                <div class="hour-text">{{ label.hour }}</div>
+                                <div class="hour-unit">時</div>
                             </div>
                         </div>
-                        <div class="programs-grid" :style="gridStyle">
-                            <div v-if="isToday" class="current-time-line" :style="currentTimeLineStyle"></div>
+                        <div class="programs-grid" :style="programsGridStyle">
+                            <div class="current-time-line" :style="currentTimeLineStyle"></div>
                             <div v-for="ch_index in timetableStore.timetable_channels.length" :key="ch_index" class="channel-border" :style="{gridColumn: ch_index}"></div>
-                            <div v-for="hour_index in 24" :key="hour_index" class="hour-border" :style="{gridRow: (hour_index * 60) + 1}"></div>
+                            <div v-for="hour_index in Math.ceil(timetableRange.totalMinutes / 60)" :key="hour_index" class="hour-border" :style="{gridRow: (hour_index * 60) + 1}"></div>
                             <template v-for="(channel, ch_index) in timetableStore.timetable_channels">
                                 <template v-for="program in channel.programs" :key="program.id">
                                     <v-tooltip location="top" :disabled="isTooltipDisabled(program)">
@@ -144,6 +173,7 @@ import { useTimetableStore } from '@/stores/TimetableStore';
 import { useSnackbarsStore } from '@/stores/SnackbarsStore';
 import { IProgram } from '@/services/Programs';
 import Reservations, { IRecordSettings } from '@/services/Reservations';
+import Breadcrumbs from '@/components/Breadcrumbs.vue';
 import HeaderBar from '@/components/HeaderBar.vue';
 import Navigation from '@/components/Navigation.vue';
 import SPHeaderBar from '@/components/SPHeaderBar.vue';
@@ -159,14 +189,99 @@ const channel_types: {id: 'ALL' | ChannelType, name: string}[] = [
     {id: 'CS', name: 'CS'},
 ];
 
-const active_tab_index = ref(0);
+const active_tab_index = ref(1); // デフォルトは地デジ（index=1）
 
 const onClickChannelType = (type: 'ALL' | ChannelType, index: number) => {
     timetableStore.setChannelType(type);
     active_tab_index.value = index;
 };
 
-// ジャンルごとに色分け
+// 日付選択メニューの表示状態
+const is_date_menu_shown = ref(false);
+
+// 選択された日付を取得
+const selected_date = computed(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const targetDate = new Date(today);
+    targetDate.setDate(targetDate.getDate() + timetableStore.selected_day_offset);
+    return targetDate;
+});
+
+// 日付リストを生成（今日を中心に前後1週間分）
+const dateList = computed(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const list: { label: string; value: string; offset: number }[] = [];
+
+    for (let i = -7; i <= 7; i++) {
+        const date = new Date(today);
+        date.setDate(date.getDate() + i);
+        const month = date.getMonth() + 1;
+        const day = date.getDate();
+        const label = i === 0 ? `${month}/${day} 今日` : `${month}/${day}`;
+        list.push({
+            label,
+            value: date.toISOString(),
+            offset: i,
+        });
+    }
+
+    return list;
+});
+
+// 日付ラベルをフォーマット
+const formatDateLabel = (date: Date) => {
+    const month = date.getMonth() + 1;
+    const day = date.getDate();
+    return `${month}/${day}`;
+};
+
+// 矢印ボタンで日付を変更
+const onClickDateArrow = async (direction: number) => {
+    const newOffset = timetableStore.selected_day_offset + direction;
+    // ±7日の範囲内に制限
+    if (newOffset >= -7 && newOffset <= 7) {
+        timetableStore.selected_day_offset = newOffset;
+        // その日付を中心とした3日分を再取得
+        await timetableStore.fetchTimetable();
+        scrollToSelectedDate();
+    }
+};
+
+// 日付リストから日付を選択
+const onSelectDate = async (offset: number) => {
+    timetableStore.selected_day_offset = offset;
+    // その日付を中心とした3日分を再取得
+    await timetableStore.fetchTimetable();
+    scrollToSelectedDate();
+    is_date_menu_shown.value = false;
+};
+
+// 選択された日付の0時にスクロール
+const scrollToSelectedDate = () => {
+    nextTick(() => {
+        setTimeout(() => {
+            const container = document.querySelector('.timetable-grid-container');
+            if (!container) return;
+
+            const range = timetableRange.value;
+            if (range.totalMinutes === 0) return;
+
+            // 取得したデータの範囲の先頭（昨日の0時）から、
+            // 選択した日（今日）の0時までの分数を計算
+            // データ構造: 昨日 | 今日(選択した日) | 明日
+            // つまり、rangeStartは「昨日の0時」なので、+24時間すれば「今日の0時」
+            const scrollTop = 24 * 60 * 6; // 24時間 * 60分 * 6px/分
+
+            container.scrollTo({
+                top: scrollTop,
+                behavior: 'smooth'
+            });
+        }, 100);
+    });
+};
+
 const genre_colors: { [key: string]: { background: string; text: string } } = {
     'ニュース・報道': { background: '#5a88a7', text: '#ffffff' },
     'スポーツ': { background: '#e07f5a', text: '#ffffff' },
@@ -184,22 +299,12 @@ const genre_colors: { [key: string]: { background: string; text: string } } = {
 };
 const default_genre_color = { background: 'rgb(var(--v-theme-background-lighten-3))', text: 'rgb(var(--v-theme-text))' };
 
-// 現在時刻 (1分ごとに更新)
 const now = ref(new Date());
 const now_timer = setInterval(() => {
     now.value = new Date();
 }, 60 * 1000);
 onUnmounted(() => {
     clearInterval(now_timer);
-});
-
-const formattedDate = computed(() => {
-    const date = timetableStore.current_date;
-    const year = date.getFullYear();
-    const month = date.getMonth() + 1;
-    const day = date.getDate();
-    const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][date.getDay()];
-    return `${year}年${month}月${day}日 (${dayOfWeek})`;
 });
 
 const formatTime = (time: string) => {
@@ -213,7 +318,6 @@ const formatFullDateTime = (time: string) => {
 };
 
 
-// テキストを指定した文字数で切り詰める
 const truncateText = (text: string, maxLength: number): string => {
     if (text.length <= maxLength) {
         return text;
@@ -221,28 +325,110 @@ const truncateText = (text: string, maxLength: number): string => {
     return text.substring(0, maxLength) + '...';
 };
 
-const gridStyle = computed(() => ({
-    'grid-template-columns': `repeat(${timetableStore.timetable_channels?.length || 0}, minmax(200px, 1fr))`,
-}));
+const timetableRange = computed(() => {
+    const channels = timetableStore.timetable_channels;
+    if (!channels || channels.length === 0) {
+        return { startTime: new Date(), endTime: new Date(), totalMinutes: 0 };
+    }
+
+    let minTime: Date | null = null;
+    let maxTime: Date | null = null;
+
+    // すべての番組の開始時刻と終了時刻から最小・最大を取得
+    channels.forEach(channel => {
+        channel.programs.forEach(program => {
+            const startTime = new Date(program.start_time);
+            const endTime = new Date(program.end_time);
+
+            if (!minTime || startTime < minTime) {
+                minTime = startTime;
+            }
+            if (!maxTime || endTime > maxTime) {
+                maxTime = endTime;
+            }
+        });
+    });
+
+    if (!minTime || !maxTime) {
+        return { startTime: new Date(), endTime: new Date(), totalMinutes: 0 };
+    }
+
+    const totalMinutes = Math.floor(((maxTime as Date).getTime() - (minTime as Date).getTime()) / (1000 * 60));
+
+    return { startTime: minTime as Date, endTime: maxTime as Date, totalMinutes };
+});
+
+const timelineLabels = computed(() => {
+    if (timetableRange.value.totalMinutes === 0) return [];
+
+    const labels: { hour: number, day: number | null }[] = [];
+    const start = new Date(timetableRange.value.startTime);
+    const end = new Date(timetableRange.value.endTime);
+
+    let current = new Date(start);
+    current.setMinutes(0, 0, 0);
+
+    while (current <= end) {
+        const hour = current.getHours();
+        const isDayStart = hour === 0;
+
+        labels.push({
+            hour,
+            day: isDayStart ? current.getDate() : null,
+        });
+
+        current.setHours(current.getHours() + 1);
+    }
+
+    return labels;
+});
+
+
+const gridStyle = computed(() => {
+    const channelCount = timetableStore.timetable_channels?.length || 0;
+    if (channelCount === 0) {
+        return { 'grid-template-columns': 'none' };
+    }
+    return {
+        'grid-template-columns': `repeat(${channelCount}, minmax(200px, 1fr))`,
+    };
+});
+
+const programsGridStyle = computed(() => {
+    const channelCount = timetableStore.timetable_channels?.length || 0;
+    if (channelCount === 0) {
+        return {
+            'grid-template-columns': 'none',
+            'grid-template-rows': 'none',
+        };
+    }
+    return {
+        'grid-template-columns': `repeat(${channelCount}, minmax(200px, 1fr))`,
+        'grid-template-rows': `repeat(${timetableRange.value.totalMinutes}, 6px)`,
+    };
+});
 
 const getProgramStyle = (program: IProgram, ch_index: number) => {
     const start = new Date(program.start_time);
-    const start_minutes = (start.getHours() - 4 + 24) % 24 * 60 + start.getMinutes();
+    const end = new Date(program.end_time);
+    const baseTime = timetableRange.value.startTime;
+
+    // 基準時刻からの経過分数を計算
+    const minutesFromStart = Math.floor((start.getTime() - baseTime.getTime()) / (1000 * 60));
     const duration_minutes = program.duration / 60;
 
     const genre = program.genres[0]?.major || 'その他';
     const color = genre_colors[genre] || default_genre_color;
     const style: { [key: string]: any } = {
         'grid-column': ch_index + 1,
-        'grid-row-start': start_minutes + 1,
-        'grid-row-end': start_minutes + duration_minutes + 1,
+        'grid-row-start': minutesFromStart + 1,
+        'grid-row-end': minutesFromStart + duration_minutes + 1,
         'background-color': color.background,
         'color': color.text,
         'border-color': color.background,
     };
 
-    // 過去の番組か判定
-    if (new Date(program.end_time) < now.value) {
+    if (end < now.value) {
         style.opacity = 0.6;
         style['pointer-events'] = 'none';
     }
@@ -250,23 +436,27 @@ const getProgramStyle = (program: IProgram, ch_index: number) => {
     return style;
 };
 
-const isToday = computed(() => {
-    const today = new Date();
-    const current = timetableStore.current_date;
-    return today.getFullYear() === current.getFullYear() &&
-           today.getMonth() === current.getMonth() &&
-           today.getDate() === current.getDate();
-});
-
 const currentTimeLineStyle = computed(() => {
-    const minutes_from_4am = ((now.value.getHours() - 4 + 24) % 24) * 60 + now.value.getMinutes();
+    if (timetableRange.value.totalMinutes === 0) {
+        return { top: '0px' };
+    }
+
+    const baseTime = timetableRange.value.startTime;
+    const current = new Date(now.value);
+
+    const minutesFromStart = Math.floor((current.getTime() - baseTime.getTime()) / (1000 * 60));
+
+    if (minutesFromStart < 0 || minutesFromStart > timetableRange.value.totalMinutes) {
+        return { top: '-9999px' };
+    }
+
     return {
-        top: `${minutes_from_4am * 6}px`,
+        top: `${minutesFromStart * 6}px`,
     };
 });
 
 const isTooltipDisabled = (program: IProgram) => {
-    return program.duration / 60 > 15; // 15分より長い番組ではツールチップを無効化
+    return program.duration / 60 > 15;
 };
 
 const is_panel_shown = ref(false);
@@ -308,83 +498,144 @@ const reserveProgram = async (program_id: string) => {
 
 
 onMounted(() => {
+    timetableStore.setChannelType('GR');
+    timetableStore.current_date = new Date();
+    timetableStore.selected_day_offset = 0; // 今日を中心に表示
     timetableStore.fetchTimetable();
 });
 
-const is_initial_load = ref(true);
-watch(() => timetableStore.timetable_channels, (new_channels) => {
-    // 初回読み込み時かつ、チャンネル情報が読み込まれた後
-    if (is_initial_load.value && new_channels && new_channels.length > 0) {
-        nextTick(() => {
-
+const scrollToCurrentTime = () => {
+    nextTick(() => {
+        setTimeout(() => {
             const container = document.querySelector('.timetable-grid-container');
             if (!container) return;
 
-            // 現在時刻 (now.value) を使ってスクロール位置を計算
-            const current_hours = now.value.getHours();
-            const current_minutes = now.value.getMinutes();
+            if (timetableRange.value.totalMinutes === 0) return;
 
-            //経過分数を計算(4時からの経過分数)
-            const minutes_from_4am = ((current_hours - 4 + 24) % 24) * 60 + current_minutes;
+            const baseTime = timetableRange.value.startTime;
+            const current = new Date(now.value);
 
-            // 1分あたり6pxでスクロール量を計算（赤いラインと同じ）
-            const scroll_top = (minutes_from_4am * 6) - 200;
-
-            // スクロールさせる
+            const minutesFromStart = Math.floor((current.getTime() - baseTime.getTime()) / (1000 * 60));
+            const scroll_top = (minutesFromStart * 6) - 200;
             container.scrollTo({
-                top: scroll_top > 0 ? scroll_top : 0, // マイナスにはならないように
+                top: scroll_top > 0 ? scroll_top : 0,
                 behavior: 'smooth',
             });
+        }, 100);
+    });
+};
 
-            is_initial_load.value = false;
-        });
+const is_initial_load = ref(true);
+watch(() => timetableStore.timetable_channels, (new_channels) => {
+    if (is_initial_load.value && new_channels && new_channels.length > 0) {
+        scrollToCurrentTime();
+        is_initial_load.value = false;
     }
 });
 
 </script>
 
+<style lang="scss">
+html:has(.timetable-container-wrapper) {
+    scrollbar-gutter: auto !important;
+    @media (max-width: 960px) and (orientation: landscape) {
+        scrollbar-gutter: stable !important;
+    }
+    @media (max-width: 600px) and (orientation: portrait) {
+        scrollbar-gutter: stable !important;
+    }
+}
+</style>
+
 <style lang="scss" scoped>
 .timetable-container-wrapper {
     width: 100%;
+    height: calc(100vh - 65px);
     min-width: 0;
-    margin-left: 21px;
-    margin-right: 21px;
+    display: flex;
+    flex-direction: column;
+    @include smartphone-horizontal {
+        height: 100vh;
+    }
     @include smartphone-vertical {
-        margin-left: 0px;
-        margin-right: 0px;
-        padding-top: 0px;
-        // スマホ表示ではHeaderBarとNavigationを非表示にする
-        margin-top: 0px;
+        height: calc(100vh - 56px - env(safe-area-inset-bottom));
+    }
+}
+
+.timetable-breadcrumbs-container {
+    padding: 20px 21px 0;
+    flex-shrink: 0;
+    @include smartphone-vertical {
+        display: none;
     }
 }
 
 .timetable-header {
     position: sticky;
     top: 65px;
-    padding-top: 5px;
+    width: 100%;
     background: rgb(var(--v-theme-background));
     z-index: 10;
+    flex-shrink: 0;
 
     @include smartphone-vertical {
-        position: relative; // スマホ表示では相対位置に変更
-        top: 0px;
-        padding-top: 0px;
-        margin-top: 0px;
+        position: relative;
+        top: 0;
     }
 
     &__date-control {
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 12px 0;
-        border-bottom: 1px solid rgb(var(--v-theme-background-lighten-2));
-        .date-display {
-            @include smartphone-horizontal {
-                font-size: 20px;
-            }
-            @include smartphone-vertical {
-                font-size: 18px;
-            }
+        gap: 8px;
+        padding: 8px 0;
+        border-bottom: 1px solid #333;
+
+        :deep(.v-btn) {
+            height: auto;
+            min-height: 0;
+            border-radius: 2.5px;
+            color: rgb(var(--v-theme-text)) !important;
+            background-color: transparent !important;
+            text-transform: none;
+            box-shadow: none !important;
+        }
+
+        :deep(.v-btn.date-button) {
+            padding: 6px 16px;
+            font-size: 15px;
+            font-weight: 500;
+            letter-spacing: 0.0892857143em !important;
+            min-width: 120px;
+        }
+
+        :deep(.v-btn[icon]) {
+            width: 40px;
+            height: 40px;
+            padding: 0;
+        }
+    }
+}
+
+.date-list {
+    max-height: 400px;
+    overflow-y: auto;
+
+    .v-list-item {
+        cursor: pointer;
+        transition: background-color 0.2s;
+
+        &:hover {
+            background-color: rgba(var(--v-theme-primary), 0.1);
+        }
+    }
+
+    .date-list-item--selected {
+        background-color: rgba(var(--v-theme-primary), 0.2);
+        font-weight: bold;
+
+        :deep(.v-list-item-title) {
+            color: rgb(var(--v-theme-primary));
         }
     }
 }
@@ -403,24 +654,24 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
             align-items: center;
             justify-content: center;
             width: 98px;
-            padding: 16px 0;
+            padding: 6px 0 10px 0;
             border-radius: 2.5px;
             color: rgb(var(--v-theme-text)) !important;
             background-color: transparent !important;
-            font-size: 16px;
+            font-size: 15px;
             letter-spacing: 0.0892857143em !important;
             text-transform: none;
             cursor: pointer;
             @include smartphone-vertical {
                 width: 90px;
-                font-size: 15px;
+                font-size: 14px;
             }
         }
 
         .channels-tab__highlight {
             position: absolute;
             left: 0;
-            bottom: 0;
+            bottom: 4px;
             width: 98px;
             height: 3px;
             background: rgb(var(--v-theme-primary));
@@ -436,12 +687,10 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
 }
 
 .timetable-body {
-    height: calc(100vh - 65px - 140px);
-
-    @include smartphone-vertical {
-        height: calc(100vh - 62px - 200px); // スマホ表示での適切な高さに調整
-        min-height: 400px; // 最小高さを設定
-    }
+    flex: 1;
+    width: 100%;
+    overflow: hidden;
+    min-height: 0;
 }
 
 .loading-container {
@@ -454,15 +703,27 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
 
 .timetable-grid-container {
     height: 100%;
+    width: 100%;
     display: grid;
     grid-template-rows: auto 1fr;
     grid-template-columns: auto 1fr;
     overflow: scroll;
 
+    @include smartphone-horizontal {
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+        &::-webkit-scrollbar {
+            display: none;
+        }
+    }
+
     @include smartphone-vertical {
-        // スマホ表示ではレイアウトを最適化
         grid-template-rows: auto auto 1fr;
-        gap: 0px;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+        &::-webkit-scrollbar {
+            display: none;
+        }
     }
 }
 
@@ -482,23 +743,18 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
     z-index: 5;
     background: rgb(var(--v-theme-background));
 
-    @include smartphone-vertical {
-        position: relative; // スマホ表示では相対位置に変更
-        top: 0px;
-        margin-top: 0px;
-    }
-
     .channel-header-cell {
-        padding: 12px 8px;
+        padding: 6px 8px;
         text-align: center;
         font-weight: bold;
-        border-right: 1px solid rgb(var(--v-theme-background-lighten-2));
+        font-size: 14px;
+        border-right: 1px solid #333;
     }
 }
 
 .timeline-container {
     grid-row: 2;
-    width: 60px;
+    width: 30px;
     position: sticky;
     left: 0;
     z-index: 6;
@@ -507,14 +763,21 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
     .hour-label {
         position: relative;
         height: 360px;
-        text-align: right;
-        padding-right: 8px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        padding-top: 4px;
         font-size: 14px;
-        color: rgb(var(--v-theme-text-darken-1));
+        color: rgb(var(--v-theme-text));
 
-        .hour-text {
-            position: relative;
-            top: -0.7em;
+        .day-text,
+        .dayofweek-text,
+        .hour-text,
+        .hour-unit {
+            font-size: 14px;
+            font-weight: normal;
+            line-height: 1.4;
         }
     }
 }
@@ -523,16 +786,15 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
     grid-row: 2;
     grid-column: 2;
     display: grid;
-    grid-template-rows: repeat(24 * 60, 6px);
     position: relative;
 
     .channel-border {
         grid-row: 1 / -1;
-        border-right: 1px solid rgb(var(--v-theme-background-lighten-2));
+        border-right: 1px solid #333;
     }
     .hour-border {
         grid-column: 1 / -1;
-        border-top: 1px dotted rgb(var(--v-theme-background-lighten-2));
+        border-top: 1px dotted #333;
     }
 
     .current-time-line {
@@ -576,6 +838,7 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
         word-break: break-word;
         display: -webkit-box;
         -webkit-line-clamp: 2;
+        line-clamp: 2;
         -webkit-box-orient: vertical;
         overflow: hidden;
     }
@@ -598,11 +861,6 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
             color: #000;
         }
 
-        &--hd {
-            background-color: rgba(76, 175, 80, 0.9);
-            color: #fff;
-        }
-
         &--genre {
             background-color: rgba(255, 255, 255, 0.2);
             color: inherit;
@@ -618,14 +876,14 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
         overflow: hidden;
         display: -webkit-box;
         -webkit-line-clamp: 2;
+        line-clamp: 2;
         -webkit-box-orient: vertical;
     }
 
     .program-time {
         font-size: 0.8em;
         opacity: 0.8;
-        margin-top: auto; // 時間を下に配置
-        writing-mode: horizontal-tb;
+        margin-top: auto;
         white-space: nowrap;
     }
 }
@@ -678,74 +936,5 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
         }
     }
 }
-
-.tech-info-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-
-    @include smartphone-vertical {
-        grid-template-columns: 1fr;
-    }
-
-    .tech-info-item {
-        display: flex;
-        flex-direction: column;
-        padding: 12px;
-        background-color: rgb(var(--v-theme-background-lighten-1));
-        border-radius: 8px;
-        border: 1px solid rgb(var(--v-theme-background-lighten-2));
-
-        .tech-info-label {
-            font-size: 0.85em;
-            font-weight: 600;
-            color: rgb(var(--v-theme-text-darken-1));
-            margin-bottom: 4px;
-        }
-
-        .tech-info-value {
-            font-size: 0.9em;
-            word-break: break-word;
-        }
-    }
-}
-
-.program-detail-content {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-
-    .detail-section {
-        &:not(:last-child) {
-            border-bottom: 1px solid rgb(var(--v-theme-background-lighten-2));
-            padding-bottom: 12px;
-        }
-
-        .detail-section-title {
-            font-size: 0.9em;
-            font-weight: 600;
-            color: rgb(var(--v-theme-primary));
-            margin-bottom: 8px;
-        }
-
-        .detail-section-content {
-            font-size: 0.875em;
-            line-height: 1.5;
-            white-space: pre-wrap;
-            word-break: break-word;
-            margin: 0;
-        }
-    }
-}
-
-.program-detail {
-    white-space: pre-wrap;
-    word-break: break-all;
-    background-color: rgb(var(--v-theme-background-lighten-1));
-    padding: 16px;
-    border-radius: 4px;
-    margin-top: 16px;
-}
-
 
 </style>
