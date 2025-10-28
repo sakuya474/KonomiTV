@@ -60,6 +60,7 @@ class RecordedVideoSummary:
     file_modified_at: datetime
     file_size: int
     file_hash: str
+    is_tsreplace_encoded: bool
 
 
 class RecordedScanTask:
@@ -285,6 +286,7 @@ class RecordedScanTask:
             'file_modified_at',
             'file_size',
             'file_hash',
+            'is_tsreplace_encoded',
         )
         videos_by_path: dict[str, list[RecordedVideoSummary]] = {}
         videos_to_keep: list[RecordedVideoSummary] = []  # 保持するレコードのリスト
@@ -299,6 +301,7 @@ class RecordedScanTask:
                 file_modified_at = row['file_modified_at'],
                 file_size = row['file_size'],
                 file_hash = row['file_hash'],
+                is_tsreplace_encoded = row['is_tsreplace_encoded'],
             )
             if recorded_video_summary.file_path not in videos_by_path:
                 videos_by_path[recorded_video_summary.file_path] = []
@@ -527,6 +530,7 @@ class RecordedScanTask:
                         'file_modified_at',
                         'file_size',
                         'file_hash',
+                        'is_tsreplace_encoded',
                     )
                     if len(summary_rows) > 0:
                         row = summary_rows[0]
@@ -540,6 +544,7 @@ class RecordedScanTask:
                             file_modified_at = row['file_modified_at'],
                             file_size = row['file_size'],
                             file_hash = row['file_hash'],
+                            is_tsreplace_encoded = row['is_tsreplace_encoded'],
                         )
 
                 # 同じファイルパスの既存レコードがあり、ファイルの基本情報（作成日時、更新日時、サイズ）が前回と一致した場合、
@@ -589,11 +594,11 @@ class RecordedScanTask:
                     logging.info(f'{file_path}: Detected encoded file, attempting to inherit metadata from original file.')
 
                     # 既にTSReplaceEncodingTaskで処理済みかチェック
-                    if existing_db_recorded_video and existing_db_recorded_video.is_tsreplace_encoded:
-                        logging.info(f'{file_path}: File already processed by TSReplaceEncodingTask with metadata inheritance (ID: {existing_db_recorded_video.id}, is_encoded: {existing_db_recorded_video.is_tsreplace_encoded}).')
+                    if existing_recorded_video_summary and existing_recorded_video_summary.is_tsreplace_encoded:
+                        logging.info(f'{file_path}: File already processed by TSReplaceEncodingTask with metadata inheritance (ID: {existing_recorded_video_summary.id}, is_encoded: {existing_recorded_video_summary.is_tsreplace_encoded}).')
                         return
 
-                    logging.info(f'{file_path}: Existing record found: ID={existing_db_recorded_video.id if existing_db_recorded_video else "None"}, is_encoded={existing_db_recorded_video.is_tsreplace_encoded if existing_db_recorded_video else "None"}')
+                    logging.info(f'{file_path}: Existing record found: ID={existing_recorded_video_summary.id if existing_recorded_video_summary else "None"}, is_encoded={existing_recorded_video_summary.is_tsreplace_encoded if existing_recorded_video_summary else "None"}')
 
                     inherited = await self._inherit_metadata_if_encoded_file(file_path)
                     if inherited:
