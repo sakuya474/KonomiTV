@@ -182,6 +182,9 @@ import { ChannelType } from '@/services/Channels';
 const timetableStore = useTimetableStore();
 const snackbarsStore = useSnackbarsStore();
 
+// 録画予約されている番組IDのセット
+const reserved_program_ids = ref<Set<string>>(new Set());
+
 const channel_types: {id: 'ALL' | ChannelType, name: string}[] = [
     {id: 'ALL', name: 'すべて'},
     {id: 'GR', name: '地デジ'},
@@ -428,6 +431,12 @@ const getProgramStyle = (program: IProgram, ch_index: number) => {
         'border-color': color.background,
     };
 
+    // 録画予約されている番組の場合は白い点線の枠を表示
+    if (reserved_program_ids.value.has(program.id)) {
+        style['border'] = '2px dashed #FFFFFF';
+        style['border-color'] = '#FFFFFF';
+    }
+
     if (end < now.value) {
         style.opacity = 0.6;
         style['pointer-events'] = 'none';
@@ -466,6 +475,15 @@ const showProgramDetails = (program: IProgram) => {
     is_panel_shown.value = true;
 };
 
+// 録画予約一覧を取得する
+const fetchReservations = async () => {
+    const reservations = await Reservations.fetchReservations();
+    if (reservations) {
+        // 録画予約されている番組IDのセットを更新
+        reserved_program_ids.value = new Set(reservations.reservations.map(r => r.program.id));
+    }
+};
+
 const is_reserving = ref(false);
 const reserveProgram = async (program_id: string) => {
     is_reserving.value = true;
@@ -490,6 +508,8 @@ const reserveProgram = async (program_id: string) => {
     if (success) {
         snackbarsStore.show('success', '録画予約を追加しました。');
         is_panel_shown.value = false;
+        // 録画予約一覧を再取得して表示を更新
+        await fetchReservations();
     } else {
         snackbarsStore.show('error', '録画予約の追加に失敗しました。');
     }
@@ -497,11 +517,15 @@ const reserveProgram = async (program_id: string) => {
 };
 
 
-onMounted(() => {
+onMounted(async () => {
     timetableStore.setChannelType('GR');
     timetableStore.current_date = new Date();
     timetableStore.selected_day_offset = 0; // 今日を中心に表示
-    timetableStore.fetchTimetable();
+    // 番組表と録画予約一覧を並行して取得
+    await Promise.all([
+        timetableStore.fetchTimetable(),
+        fetchReservations(),
+    ]);
 });
 
 const scrollToCurrentTime = () => {
