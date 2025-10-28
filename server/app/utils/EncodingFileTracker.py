@@ -157,26 +157,40 @@ class EncodingFileTracker:
 
         async with self._file_lock:
             for file_path, timestamp in self._file_timestamps.items():
-                if current_time - timestamp > timeout_seconds:
+                tracker_age = current_time - timestamp
+                if tracker_age > timeout_seconds:
                     # ファイルが実際に存在し、最近更新されていないかチェック
                     if os.path.exists(file_path):
                         try:
                             file_mtime = os.path.getmtime(file_path)
+                            file_age = current_time - file_mtime
                             # ファイルが5分以上更新されていない場合はstale
-                            if current_time - file_mtime > 300:  # 5分
-                                stale_files.append(file_path)
-                        except OSError:
+                            if file_age > 300:  # 5分
+                                stale_files.append((file_path, tracker_age, file_age))
+                        except OSError as e:
                             # ファイルアクセスエラーの場合もstaleとして扱う
-                            stale_files.append(file_path)
+                            stale_files.append((file_path, tracker_age, None))
+                            logging.warning(f'OSError accessing file during stale check: {file_path} - {e}')
                     else:
                         # ファイルが存在しない場合もstale
-                        stale_files.append(file_path)
+                        stale_files.append((file_path, tracker_age, None))
 
             # staleファイルを除去
-            for file_path in stale_files:
+            for file_info in stale_files:
+                file_path = file_info[0]
+                tracker_age = file_info[1]
+                file_age = file_info[2]
+
                 self._encoding_files.discard(file_path)
                 self._file_timestamps.pop(file_path, None)
-                logging.warning(f'Removed stale encoding file from tracker: {file_path}')
+
+                if file_age is not None:
+                    logging.warning(f'Removed stale encoding file from tracker: {file_path} (tracker age: {tracker_age:.0f}s, file unchanged: {file_age:.0f}s)')
+                else:
+                    logging.warning(f'Removed stale encoding file from tracker: {file_path} (tracker age: {tracker_age:.0f}s, file not found or inaccessible)')
+
+        if stale_files:
+            logging.info(f'Encoding cleanup task: Cleaned up {len(stale_files)} stale encoding entries')
 
         return len(stale_files)
 

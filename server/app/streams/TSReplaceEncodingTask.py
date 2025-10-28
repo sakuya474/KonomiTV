@@ -50,7 +50,8 @@ class TSReplaceEncodingTask:
     }
 
     # リトライ可能なエラーカテゴリ
-    RETRYABLE_CATEGORIES = ['RESOURCE', 'NETWORK', 'ENCODER', 'PROCESS', 'STREAM_CHANGE', 'VCEENCC_PARAM', 'FFMPEG_STREAM']
+    # CRASH は条件付きでリトライ可能（PMT変更が検出された場合のみ）
+    RETRYABLE_CATEGORIES = ['RESOURCE', 'NETWORK', 'ENCODER', 'PROCESS', 'STREAM_CHANGE', 'VCEENCC_PARAM', 'FFMPEG_STREAM', 'CRASH']
 
     # 共通品質設定
     DEFAULT_QUALITY_CONFIG = {
@@ -111,6 +112,16 @@ class TSReplaceEncodingTask:
             r'Option.*cannot be applied to input url',
             r'Error parsing options for input file',
             r'Error opening input files'
+        ],
+        'CRASH': [
+            r'return code 3221225477',  # 0xC0000005 - Access Violation
+            r'return code -1073741819',  # 同上（符号付き整数表現）
+            r'return code 3221225725',  # 0xC00000FD - Stack Overflow
+            r'return code -1073741571',  # 同上（符号付き整数表現）
+            r'return code 3221225595',  # 0xC000001B - Illegal Instruction
+            r'Segmentation fault',
+            r'Access violation',
+            r'Fatal error'
         ]
     }
 
@@ -172,6 +183,9 @@ class TSReplaceEncodingTask:
 
         # キャンセルフラグ
         self._is_cancelled: bool = False
+
+        # クラッシュ発生時の進捗記録（同じ場所でのクラッシュ検出用）
+        self._crash_progress_history: list[float] = []
 
         # ログディレクトリの設定
         self.log_dir = Path(LOGS_DIR) / 'tsreplace_encoding'
@@ -418,17 +432,23 @@ class TSReplaceEncodingTask:
             return custom_options.split()
         else:
             # デフォルトオプション
+            # PMT変更やデータ破損に対する耐性を向上させるため、エラー検出を緩和
+            error_resilience_opts = [
+                '-err_detect', 'ignore_err',  # エラーを無視
+                '-fflags', '+genpts+igndts',  # タイムスタンプを再生成、不正なDTSを無視
+            ]
+
             if is_hevc:
                 # x265 の例
                 return [
-                    '-y', '-f', 'mpegts', '-i', '-', '-copyts', '-start_at_zero',
+                    '-y', '-f', 'mpegts', '-i', '-', *error_resilience_opts, '-copyts', '-start_at_zero',
                     '-vf', 'yadif', '-an', '-c:v', 'libx265', '-preset', 'medium',
                     '-crf', '23', '-g', '90', '-f', 'mpegts', '-'
                 ]
             else:
                 # x264 の例
                 return [
-                    '-y', '-f', 'mpegts', '-i', '-', '-copyts', '-start_at_zero',
+                    '-y', '-f', 'mpegts', '-i', '-', *error_resilience_opts, '-copyts', '-start_at_zero',
                     '-vf', 'yadif', '-an', '-c:v', 'libx264', '-preset', 'slow',
                     '-crf', '23', '-g', '90', '-f', 'mpegts', '-'
                 ]
@@ -734,6 +754,14 @@ class TSReplaceEncodingTask:
                         if line_str:  # 空行をスキップ
                             stderr_data.append(line_str)
                             await self._updateProgressFromOutput(line_str)
+
+                            # PMT変更を検出
+                            if 'New PMT' in line_str or 'PMT' in line_str and 'version' in line_str:
+                                if not hasattr(self, '_pmt_change_detected'):
+                                    self._pmt_change_detected = False
+                                self._pmt_change_detected = True
+                                logging.warning(f'PMT change detected during encoding: {line_str}')
+
                             if any(keyword in line_str.lower() for keyword in ['progress', '%', 'frame=', 'time=']):
                                 logging.debug(f'Encoding error output: {line_str}')
 
@@ -745,19 +773,59 @@ class TSReplaceEncodingTask:
             async def periodic_progress_update():
                 start_time = time.time()
                 last_update_time = start_time
+                last_output_file_size = 0
+                last_output_file_size_time = start_time
+                stall_warning_shown = False
+
                 while self._tsreplace_process and self._tsreplace_process.returncode is None and not self._is_cancelled:
                     await asyncio.sleep(0.5)  # 0.5秒ごとに確認
                     current_time = time.time()
                     elapsed_time = current_time - start_time
 
+                    # 出力ファイルのサイズをチェック（プロセスが実際に動いているか確認）
+                    current_output_file_size = 0
+                    if os.path.exists(self.encoding_task.output_file_path):
+                        try:
+                            current_output_file_size = os.path.getsize(self.encoding_task.output_file_path)
+                        except OSError:
+                            pass
+
+                    # 出力ファイルサイズが変化している場合、プロセスは正常に動作中
+                    if current_output_file_size > last_output_file_size:
+                        last_output_file_size = current_output_file_size
+                        last_output_file_size_time = current_time
+                        stall_warning_shown = False
+
+                    # 出力ファイルサイズが5分以上変化していない場合、警告
+                    time_since_last_change = current_time - last_output_file_size_time
+                    if time_since_last_change > 300 and not stall_warning_shown:  # 5分
+                        logging.warning(f'TSReplace encoding appears to be stalled: No output file size change for {time_since_last_change:.0f}s - {os.path.basename(self.encoding_task.input_file_path)}')
+                        stall_warning_shown = True
+
+                    # プロセスが10分以上停止している場合、強制終了
+                    if time_since_last_change > 600:  # 10分
+                        logging.error(f'TSReplace encoding stalled for {time_since_last_change:.0f}s, killing process - {os.path.basename(self.encoding_task.input_file_path)}')
+                        if self._tsreplace_process:
+                            try:
+                                self._tsreplace_process.kill()
+                            except:
+                                pass
+                        break
+
                     # 時間ベースの進捗推定を定期的に更新
                     if current_time - last_update_time > 1.0:  # 1秒ごとに更新
-                        # ファイルサイズに基づく推定処理時間
+                        # ファイルサイズに基づく推定処理時間（より現実的な見積もり）
                         input_file_size = os.path.getsize(self.encoding_task.input_file_path) if os.path.exists(self.encoding_task.input_file_path) else 0
                         file_size_mb = input_file_size / (1024 * 1024) if input_file_size > 0 else 1
 
-                        # より短い推定時間（MB当たり0.5-1秒、最低5秒）でより積極的な進捗表示
-                        estimated_total_time = max(file_size_mb * 0.8, 5)
+                        # ソフトウェアエンコードとハードウェアエンコードで異なる見積もり時間
+                        if self.encoding_task.encoder_type == 'software':
+                            # ソフトウェアエンコード: MB当たり約3-5秒（より保守的な見積もり）
+                            estimated_total_time = max(file_size_mb * 4.0, 30)
+                        else:
+                            # ハードウェアエンコード: MB当たり約0.5-1秒
+                            estimated_total_time = max(file_size_mb * 0.8, 10)
+
                         time_based_progress = min((elapsed_time / estimated_total_time) * 100, 95.0)
 
                         # 進捗が1%以上増加する場合、または初回の場合は更新
@@ -769,7 +837,11 @@ class TSReplaceEncodingTask:
                             estimated_remaining = estimated_total_time - elapsed_time if estimated_total_time > elapsed_time else 0
                             eta_str = f", ETA: {estimated_remaining:.0f}s" if estimated_remaining > 0 else ""
 
-                            logging.info(f'TSReplace progress: {self.encoding_task.progress:.1f}% (elapsed: {elapsed_time:.1f}s{eta_str}) [{codec_info}] - {os.path.basename(self.encoding_task.input_file_path)}')
+                            # 出力ファイルサイズ情報も追加
+                            output_size_mb = current_output_file_size / (1024 * 1024) if current_output_file_size > 0 else 0
+                            output_info = f", output: {output_size_mb:.1f}MB" if output_size_mb > 0 else ""
+
+                            logging.info(f'TSReplace progress: {self.encoding_task.progress:.1f}% (elapsed: {elapsed_time:.1f}s{eta_str}{output_info}) [{codec_info}] - {os.path.basename(self.encoding_task.input_file_path)}')
                             last_update_time = current_time
 
             progress_update_task = asyncio.create_task(periodic_progress_update())
@@ -784,7 +856,53 @@ class TSReplaceEncodingTask:
             stderr = b'\n'.join(line.encode('utf-8') for line in stderr_data)
 
             # 結果を確認
-            if self._tsreplace_process.returncode == 0:
+            returncode = self._tsreplace_process.returncode
+
+            # Windows のクラッシュリターンコードをチェック
+            if returncode in [3221225477, -1073741819, 3221225725, -1073741571, 3221225595]:
+                # クラッシュが検出された場合、詳細情報をログに記録
+                crash_type = {
+                    3221225477: 'Access Violation (0xC0000005)',
+                    -1073741819: 'Access Violation (0xC0000005)',
+                    3221225725: 'Stack Overflow (0xC00000FD)',
+                    -1073741571: 'Stack Overflow (0xC00000FD)',
+                    3221225595: 'Illegal Instruction (0xC000001B)'
+                }.get(returncode, f'Unknown crash ({returncode})')
+
+                # クラッシュ時の進捗を記録
+                current_progress = self.encoding_task.progress
+                self._crash_progress_history.append(current_progress)
+
+                # 同じ場所（±5%以内）で複数回クラッシュしているかチェック
+                similar_crash_count = 0
+                for prev_progress in self._crash_progress_history[:-1]:  # 最新のものを除く
+                    if abs(prev_progress - current_progress) <= 5.0:  # 5%以内
+                        similar_crash_count += 1
+
+                error_msg = f'TSReplace/FFmpeg crashed with {crash_type} at {current_progress:.1f}% progress'
+
+                # 同じ場所で複数回クラッシュしている場合
+                if similar_crash_count > 0:
+                    error_msg += f' (crashed {similar_crash_count + 1} times at similar progress)'
+                    if hasattr(self, '_pmt_change_detected') and self._pmt_change_detected:
+                        error_msg += '. This recorded file contains PMT changes that consistently cause crashes.'
+                        logging.error(f'{error_msg} - This is likely a bug in tsreplace/FFmpeg when handling PMT changes in recorded files.')
+                    else:
+                        error_msg += '. This appears to be a reproducible crash at a specific point in the file.'
+                        logging.error(f'{error_msg} - Consider trying a different encoder or reporting this as a bug.')
+                else:
+                    # 初回クラッシュ
+                    if hasattr(self, '_pmt_change_detected') and self._pmt_change_detected:
+                        error_msg += ' after PMT change was detected. This may be related to stream format changes in the recorded file.'
+                        logging.error(f'{error_msg} - Retry may help, but if it crashes again at the same point, it is a tsreplace/FFmpeg bug.')
+                    else:
+                        error_msg += '. This appears to be a critical bug in the encoder.'
+                        logging.error(f'{error_msg} - Retry may not resolve the issue.')
+
+                self.encoding_task.error_message = error_msg
+                return False
+
+            if returncode == 0:
                 # エンコード成功時にプログレスを100%に設定
                 self.encoding_task.progress = 100.0
 
@@ -1098,6 +1216,29 @@ class TSReplaceEncodingTask:
         """エラーがリトライ可能かを判定する"""
         if retry_count >= max_retries:
             return False
+
+        # CRASHカテゴリの場合の特別処理
+        if error_category == 'CRASH':
+            # 同じ場所で2回以上クラッシュしている場合、リトライしない
+            if len(self._crash_progress_history) >= 2:
+                current_progress = self._crash_progress_history[-1]
+                prev_progress = self._crash_progress_history[-2]
+                if abs(current_progress - prev_progress) <= 5.0:  # 5%以内の差
+                    logging.warning(f'Crash occurred at similar progress ({prev_progress:.1f}% -> {current_progress:.1f}%) - this is likely a reproducible bug, skipping retry')
+                    return False
+
+            # PMT変更が検出されていた場合、1回だけリトライ
+            if hasattr(self, '_pmt_change_detected') and self._pmt_change_detected:
+                if retry_count == 0:
+                    logging.info('Crash occurred after PMT change - will retry once as this may be recoverable')
+                    return True
+                else:
+                    logging.warning('Already retried after PMT change crash - skipping further retries')
+                    return False
+            else:
+                logging.warning('Crash occurred without PMT change - likely a critical bug, skipping retry')
+                return False
+
         return error_category in self.RETRYABLE_CATEGORIES
 
     def _getRetryDelay(self, error_category: str, retry_count: int) -> int:
@@ -1110,6 +1251,7 @@ class TSReplaceEncodingTask:
             'STREAM_CHANGE': 5,
             'VCEENCC_PARAM': 3,
             'FFMPEG_STREAM': 3,
+            'CRASH': 10,  # クラッシュ後は少し待機してからリトライ
         }
         base_delay = base_delays.get(error_category, 10)
         delay = min(base_delay * (2 ** retry_count), 300)

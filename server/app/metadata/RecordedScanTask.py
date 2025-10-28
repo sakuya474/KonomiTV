@@ -482,9 +482,10 @@ class RecordedScanTask:
                     current_time = time.time()
                     file_mtime = stat.st_mtime
 
-                    # ファイルが5分以上変更されていない場合は、エンコードが完了している可能性が高い
-                    if current_time - file_mtime > 300:  # 5分 = 300秒
-                        logging.warning(f'{file_path}: File has not been modified for over 5 minutes, removing from encoding tracker.')
+                    # ファイルが15分以上変更されていない場合は、エンコードが異常終了している可能性が高い
+                    # (TSReplaceEncodingTask側で10分停止したら強制終了するため、それより長い時間を設定)
+                    if current_time - file_mtime > 900:  # 15分 = 900秒
+                        logging.warning(f'{file_path}: File has not been modified for over 15 minutes, removing from encoding tracker.')
                         await encoding_tracker.forceRemoveEncodingFile(file_path)
                         # 削除後、処理を続行
                     else:
@@ -496,8 +497,6 @@ class RecordedScanTask:
                             logging.debug(f'{file_path}: File is currently being encoded. ignored.')
                             # 定期的にスタイルエントリのクリーンアップを実行
                             stale_count = await encoding_tracker.cleanupStaleEntries()
-                            if stale_count > 0:
-                                logging.info(f'Cleaned up {stale_count} stale encoding entries')
 
                         return
 
