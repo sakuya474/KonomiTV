@@ -437,6 +437,47 @@ def Installer(version: str, install_fork: bool) -> None:
         recorded_folders.append(str(recorded_folder_path))
         print(Padding(f'[green]現在指定されている録画フォルダ: {", ".join(recorded_folders)}', (0, 2, 0, 2)))
 
+    # ***** エンコード済みファイルの保存先フォルダのパス *****
+    table_06_5 = CreateTable()
+    table_06_5.add_column('06-5. エンコード済みファイルの保存先フォルダのパスを入力してください。')
+    table_06_5.add_row('TSReplace エンコードでエンコードされたファイルの保存先フォルダを設定してください。')
+    table_06_5.add_row('空欄にすると、録画フォルダ内に Encoded フォルダを自動作成します。')
+    if platform_type == 'Windows':
+        table_06_5.add_row('入力例: E:\\Encoded')
+    elif platform_type == 'Linux' or platform_type == 'Linux-Docker':
+        table_06_5.add_row('入力例: /mnt/hdd/Encoded')
+    table_06_5.add_row('入力を終了する場合は、何も入力せずに Enter キーを押してください。')
+    print(Padding(table_06_5, (1, 2, 1, 2)))
+
+    # エンコード済みファイルの保存先フォルダ
+    encoded_folder = ''
+    while True:
+        # 入力プロンプト (バリデーションに失敗し続ける限り何度でも表示される)
+        encoded_folder_input = CustomPrompt.ask('エンコード済みファイルの保存先フォルダのパス')
+
+        # 何も入力されなかった場合は入力を終了
+        if encoded_folder_input == '':
+            break
+
+        # 入力されたパスを Path オブジェクトに変換
+        encoded_folder_path = Path(encoded_folder_input)
+
+        # バリデーション
+        if encoded_folder_path.is_absolute() is False:
+            print(Padding('[red]エンコード済みファイルの保存先フォルダは絶対パスで入力してください。', (0, 2, 0, 2)))
+            continue
+        if encoded_folder_path.exists() is False:
+            print(Padding('[red]指定されたエンコード済みファイルの保存先フォルダが存在しません。', (0, 2, 0, 2)))
+            continue
+        if encoded_folder_path.is_dir() is False:
+            print(Padding('[red]指定されたパスはフォルダではありません。', (0, 2, 0, 2)))
+            continue
+
+        # すべてのバリデーションを通過
+        encoded_folder = str(encoded_folder_path)
+        print(Padding(f'[green]エンコード済みファイルの保存先フォルダ: {encoded_folder}', (0, 2, 0, 2)))
+        break
+
     # ***** BDライブラリの設定 *****
     table_07 = CreateTable()
     table_07.add_column('07. BDライブラリの設定')
@@ -696,6 +737,8 @@ def Installer(version: str, install_fork: bool) -> None:
         config_dict['video']['recorded_folders'] = recorded_folders
         config_dict['video']['bd_library_folders'] = bd_library_folders
         config_dict['capture']['upload_folders'] = capture_upload_folders
+        if encoded_folder:
+            config_dict['tsreplace_encoding']['encoded_folder'] = encoded_folder
         config_dict['discord']['token'] = discord_bot_token
 
         # サーバー設定データを保存

@@ -118,6 +118,19 @@
                     :disabled="is_auto_encoding_disabled">
                 </v-text-field>
             </div>
+            <div class="settings__item">
+                <div class="settings__item-heading">エンコード済みファイルの保存先フォルダ</div>
+                <div class="settings__item-label">
+                    エンコード済みファイルの保存先フォルダの絶対パスを指定してください。<br>
+                    空欄にすると、録画フォルダ内に Encoded フォルダを自動作成します。
+                </div>
+                <v-text-field class="settings__item-form" color="primary" variant="outlined"
+                    :density="is_form_dense ? 'compact' : 'default'"
+                    placeholder="例: E:\Encoded"
+                    v-model="server_settings.tsreplace_encoding.encoded_folder"
+                    :disabled="is_disabled">
+                </v-text-field>
+            </div>
 
             <v-btn class="settings__save-button bg-secondary mt-6" variant="flat"
                 :disabled="is_disabled" @click="updateServerSettings()">
