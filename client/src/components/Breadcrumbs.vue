@@ -28,7 +28,7 @@ defineProps<{
 .breadcrumbs {
     display: flex;
     align-items: center;
-    margin-bottom: 8px;
+    margin-bottom: 0;
     font-size: 13px;
     @include smartphone-vertical {
         display: none;

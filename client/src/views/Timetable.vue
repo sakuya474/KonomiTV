@@ -587,24 +587,42 @@ html:has(.timetable-container-wrapper) {
 }
 
 .timetable-breadcrumbs-container {
-    padding: 20px 21px 0;
+    padding-top: 20px;
+    padding-left: 21px;
+    padding-right: 21px;
+    padding-bottom: 0;
+    margin-top: 0;
+    margin-bottom: 0;
     flex-shrink: 0;
+    @include smartphone-horizontal {
+        padding-left: 0;
+        padding-right: 0;
+    }
     @include smartphone-vertical {
         display: none;
     }
 }
 
 .timetable-header {
-    position: sticky;
-    top: 65px;
     width: 100%;
     background: rgb(var(--v-theme-background));
     z-index: 10;
     flex-shrink: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+    padding-top: 0;
+    padding-left: 21px;
+    padding-right: 21px;
+    padding-bottom: 0;
+
+    @include smartphone-horizontal {
+        padding-left: 0;
+        padding-right: 0;
+    }
 
     @include smartphone-vertical {
-        position: relative;
-        top: 0;
+        padding-left: 0;
+        padding-right: 0;
     }
 
     &__date-control {
@@ -666,12 +684,20 @@ html:has(.timetable-container-wrapper) {
 
 .channels-tab {
     display: flex;
+    margin-top: 0;
+    margin-bottom: 0;
+    padding-top: 0;
+    padding-bottom: 0;
     .channels-tab__buttons {
         display: flex;
         position: relative;
         align-items: center;
+        margin-top: 0;
         margin-left: auto;
         margin-right: auto;
+        margin-bottom: 0;
+        padding-top: 0;
+        padding-bottom: 0;
 
         .channels-tab__button {
             display: flex;
