@@ -437,11 +437,6 @@ const getProgramStyle = (program: IProgram, ch_index: number) => {
         style['border-color'] = '#FFFFFF';
     }
 
-    if (end < now.value) {
-        style.opacity = 0.6;
-        style['pointer-events'] = 'none';
-    }
-
     return style;
 };
 
