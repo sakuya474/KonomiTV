@@ -630,7 +630,7 @@ html:has(.timetable-container-wrapper) {
         align-items: center;
         justify-content: center;
         gap: 8px;
-        padding: 8px 0;
+        padding: 0;
         border-bottom: 1px solid #333;
 
         :deep(.v-btn) {
