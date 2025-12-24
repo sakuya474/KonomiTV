@@ -1,22 +1,18 @@
-from fastapi import APIRouter, HTTPException, Depends
+import json
+import os
+from datetime import datetime
+from typing import Annotated, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+
 from app.models.BDLibrary import BDLibrary
 from app.models.BDLibraryHistory import BDLibraryHistory
 from app.models.BDLibraryMylist import BDLibraryMylist
-
 from app.models.User import User
 from app.routers.UsersRouter import GetCurrentAdminUser, GetCurrentUser
-from typing import List, Annotated
-from pydantic import BaseModel
-from datetime import datetime
-import os
-import yaml
-from fastapi.responses import FileResponse
-import json
-from fastapi.responses import FileResponse
-import json
-from typing import Optional, List, Annotated
-from pydantic import BaseModel
-from datetime import datetime
+
 
 # Define Pydantic models for response
 class BDLibraryHistoryResponseItem(BaseModel):
@@ -43,16 +39,11 @@ class BDLibraryMylistResponseItem(BaseModel):
     class Config:
         from_attributes = True
 
-# プロジェクトルートを「このファイルから3階層上」として計算
-base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-config_path = os.path.join(base_dir, 'config.yaml')
-if not os.path.exists(config_path):
-    config_path = os.path.join(base_dir, 'config.example.yaml')
-
 router = APIRouter(
     tags=['BDLibrary'],
     prefix='/api/bd-library',
 )
+
 
 # BDライブラリ検索条件のスキーマ
 class BDLibrarySearchCondition(BaseModel):
@@ -60,27 +51,32 @@ class BDLibrarySearchCondition(BaseModel):
     is_case_sensitive: bool = False
     is_fuzzy_search_enabled: bool = False
 
+
+async def _build_bd_dict(bd: BDLibrary) -> dict:
+    """BD情報にトラック情報を追加して辞書を構築する共通処理"""
+    available_qualities = []
+    audio = []
+    subtitle = []
+    tracks_path = os.path.join(bd.path, 'tracks.json')
+    if os.path.isfile(tracks_path):
+        with open(tracks_path, encoding='utf-8') as f:
+            tracks = json.load(f)
+            available_qualities = tracks.get('available_qualities', [])
+            audio = tracks.get('audio', [])
+            subtitle = tracks.get('subtitle', [])
+    bd_dict = bd.__dict__.copy()
+    bd_dict['available_qualities'] = available_qualities
+    bd_dict['audio'] = audio
+    bd_dict['subtitle'] = subtitle
+    return bd_dict
+
+
 @router.get('/', summary='BDライブラリ一覧取得')
 async def list_bd_library():
     bds = await BDLibrary.all()
     bd_list = []
     for bd in bds:
-        hls_dir = bd.path
-        available_qualities = []
-        audio = []
-        subtitle = []
-        tracks_path = os.path.join(hls_dir, 'tracks.json')
-        if os.path.isfile(tracks_path):
-            with open(tracks_path, encoding='utf-8') as f:
-                tracks = json.load(f)
-                available_qualities = tracks.get('available_qualities', [])
-                audio = tracks.get('audio', [])
-                subtitle = tracks.get('subtitle', [])
-        bd_dict = bd.__dict__.copy()
-        bd_dict['available_qualities'] = available_qualities
-        bd_dict['audio'] = audio
-        bd_dict['subtitle'] = subtitle
-        bd_list.append(bd_dict)
+        bd_list.append(await _build_bd_dict(bd))
     return bd_list
 
 @router.post('/search', summary='BDライブラリ検索')
@@ -94,44 +90,14 @@ async def search_bd_library(search_condition: BDLibrarySearchCondition):
     for bd in bds:
         # 検索キーワードが空の場合は全てのBDを返す
         if not search_condition.keyword.strip():
-            hls_dir = bd.path
-            available_qualities = []
-            audio = []
-            subtitle = []
-            tracks_path = os.path.join(hls_dir, 'tracks.json')
-            if os.path.isfile(tracks_path):
-                with open(tracks_path, encoding='utf-8') as f:
-                    tracks = json.load(f)
-                    available_qualities = tracks.get('available_qualities', [])
-                    audio = tracks.get('audio', [])
-                    subtitle = tracks.get('subtitle', [])
-            bd_dict = bd.__dict__.copy()
-            bd_dict['available_qualities'] = available_qualities
-            bd_dict['audio'] = audio
-            bd_dict['subtitle'] = subtitle
-            bd_list.append(bd_dict)
+            bd_list.append(await _build_bd_dict(bd))
         else:
             # キーワード検索
             keyword = search_condition.keyword.lower()
             title = bd.title.lower()
 
             if keyword in title:
-                hls_dir = bd.path
-                available_qualities = []
-                audio = []
-                subtitle = []
-                tracks_path = os.path.join(hls_dir, 'tracks.json')
-                if os.path.isfile(tracks_path):
-                    with open(tracks_path, encoding='utf-8') as f:
-                        tracks = json.load(f)
-                        available_qualities = tracks.get('available_qualities', [])
-                        audio = tracks.get('audio', [])
-                        subtitle = tracks.get('subtitle', [])
-                bd_dict = bd.__dict__.copy()
-                bd_dict['available_qualities'] = available_qualities
-                bd_dict['audio'] = audio
-                bd_dict['subtitle'] = subtitle
-                bd_list.append(bd_dict)
+                bd_list.append(await _build_bd_dict(bd))
 
     return bd_list
 
@@ -299,21 +265,7 @@ async def get_bd(bd_id: int):
     bd = await BDLibrary.get_or_none(id=bd_id)
     if not bd:
         raise HTTPException(status_code=404, detail='Not found')
-    tracks_path = os.path.join(bd.path, 'tracks.json')
-    available_qualities = []
-    audio = []
-    subtitle = []
-    if os.path.isfile(tracks_path):
-        with open(tracks_path, encoding='utf-8') as f:
-            tracks = json.load(f)
-            available_qualities = tracks.get('available_qualities', [])
-            audio = tracks.get('audio', [])
-            subtitle = tracks.get('subtitle', [])
-    bd_dict = bd.__dict__.copy()
-    bd_dict['available_qualities'] = available_qualities
-    bd_dict['audio'] = audio
-    bd_dict['subtitle'] = subtitle
-    return bd_dict
+    return await _build_bd_dict(bd)
 
 @router.get('/{bd_id}/chapters', summary='BDライブラリチャプター情報取得')
 async def get_bd_chapters(bd_id: int):

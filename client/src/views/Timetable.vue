@@ -337,8 +337,13 @@ const timetableRange = computed(() => {
     let minTime: Date | null = null;
     let maxTime: Date | null = null;
 
+    // BS と CS の番組データを基準に時刻範囲を計算（地デジの時刻がずれている可能性があるため）
     // すべての番組の開始時刻と終了時刻から最小・最大を取得
     channels.forEach(channel => {
+        // 地デジ (GR) のチャンネルは時刻計算から除外（BS/CS を基準にする）
+        if (channel.channel.type === 'GR') {
+            return;
+        }
         channel.programs.forEach(program => {
             const startTime = new Date(program.start_time);
             const endTime = new Date(program.end_time);
@@ -351,6 +356,23 @@ const timetableRange = computed(() => {
             }
         });
     });
+
+    // BS/CS の番組データがない場合は、すべてのチャンネルから計算（フォールバック）
+    if (!minTime || !maxTime) {
+        channels.forEach(channel => {
+            channel.programs.forEach(program => {
+                const startTime = new Date(program.start_time);
+                const endTime = new Date(program.end_time);
+
+                if (!minTime || startTime < minTime) {
+                    minTime = startTime;
+                }
+                if (!maxTime || endTime > maxTime) {
+                    maxTime = endTime;
+                }
+            });
+        });
+    }
 
     if (!minTime || !maxTime) {
         return { startTime: new Date(), endTime: new Date(), totalMinutes: 0 };
@@ -415,6 +437,14 @@ const getProgramStyle = (program: IProgram, ch_index: number) => {
     const start = new Date(program.start_time);
     const end = new Date(program.end_time);
     const baseTime = timetableRange.value.startTime;
+
+    // 地デジの番組データの時刻が15分ずれている可能性があるため、地デジのチャンネルの場合は15分補正
+    const channel = timetableStore.timetable_channels?.[ch_index];
+    if (channel && channel.channel.type === 'GR') {
+        // 地デジの番組の時刻を15分進める（15分ずれている場合の補正）
+        start.setMinutes(start.getMinutes() + 15);
+        end.setMinutes(end.getMinutes() + 15);
+    }
 
     // 基準時刻からの経過分数を計算
     const minutesFromStart = Math.floor((start.getTime() - baseTime.getTime()) / (1000 * 60));

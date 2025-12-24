@@ -7,16 +7,18 @@ import json
 import os
 import re
 import shutil
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, ClassVar, Dict, Literal, Optional, Tuple
+from typing import Any, ClassVar, Literal
 
 from app import logging
 from app.config import Config
 from app.constants import LIBRARY_PATH, LOGS_DIR
 from app.models.RecordedVideo import RecordedVideo
 from app.schemas import EncodingTask
+from tortoise.exceptions import DoesNotExist
 
 
 TSREPLACE_VERSION = "0.16"
@@ -50,8 +52,7 @@ class TSReplaceEncodingTask:
     }
 
     # リトライ可能なエラーカテゴリ
-    # CRASH は条件付きでリトライ可能（PMT変更が検出された場合のみ）
-    RETRYABLE_CATEGORIES = ['RESOURCE', 'NETWORK', 'ENCODER', 'PROCESS', 'STREAM_CHANGE', 'VCEENCC_PARAM', 'FFMPEG_STREAM', 'CRASH']
+    RETRYABLE_CATEGORIES = ['RESOURCE', 'NETWORK', 'ENCODER', 'PROCESS', 'STREAM_CHANGE', 'VCEENCC_PARAM', 'FFMPEG_STREAM']
 
     # 共通品質設定
     DEFAULT_QUALITY_CONFIG = {
@@ -112,20 +113,10 @@ class TSReplaceEncodingTask:
             r'Option.*cannot be applied to input url',
             r'Error parsing options for input file',
             r'Error opening input files'
-        ],
-        'CRASH': [
-            r'return code 3221225477',  # 0xC0000005 - Access Violation
-            r'return code -1073741819',  # 同上（符号付き整数表現）
-            r'return code 3221225725',  # 0xC00000FD - Stack Overflow
-            r'return code -1073741571',  # 同上（符号付き整数表現）
-            r'return code 3221225595',  # 0xC000001B - Illegal Instruction
-            r'Segmentation fault',
-            r'Access violation',
-            r'Fatal error'
         ]
     }
 
-    def _getQualityConfig(self) -> Dict[str, Any]:
+    def _getQualityConfig(self) -> dict[str, Any]:
         """品質設定を取得する"""
         config = self.DEFAULT_QUALITY_CONFIG.copy()
         config['is_hevc'] = self.encoding_task.codec == 'hevc'
@@ -178,14 +169,16 @@ class TSReplaceEncodingTask:
         # エンコードプロセス
         self._tsreplace_process: asyncio.subprocess.Process | None = None
 
+        # 出力読み取りタスクへの参照（キャンセル時に即座に停止するため）
+        self._stdout_task: asyncio.Task | None = None
+        self._stderr_task: asyncio.Task | None = None
+        self._progress_update_task: asyncio.Task | None = None
+
         # エンコード完了フラグ
         self._is_finished: bool = False
 
         # キャンセルフラグ
         self._is_cancelled: bool = False
-
-        # クラッシュ発生時の進捗記録（同じ場所でのクラッシュ検出用）
-        self._crash_progress_history: list[float] = []
 
         # ログディレクトリの設定
         self.log_dir = Path(LOGS_DIR) / 'tsreplace_encoding'
@@ -322,7 +315,6 @@ class TSReplaceEncodingTask:
                 return 0
 
             # JSON出力をパース
-            import json
             probe_data = json.loads(stdout.decode('utf-8'))
 
             duration_str = probe_data.get('format', {}).get('duration')
@@ -372,7 +364,6 @@ class TSReplaceEncodingTask:
                 return {'video_count': 1, 'audio_count': 2, 'data_count': 1}
 
             # JSON出力をパース
-            import json
             probe_data = json.loads(stdout.decode('utf-8'))
 
             # ストリーム数をカウント
@@ -432,23 +423,17 @@ class TSReplaceEncodingTask:
             return custom_options.split()
         else:
             # デフォルトオプション
-            # PMT変更やデータ破損に対する耐性を向上させるため、エラー検出を緩和
-            error_resilience_opts = [
-                '-err_detect', 'ignore_err',  # エラーを無視
-                '-fflags', '+genpts+igndts',  # タイムスタンプを再生成、不正なDTSを無視
-            ]
-
             if is_hevc:
                 # x265 の例
                 return [
-                    '-y', '-f', 'mpegts', '-i', '-', *error_resilience_opts, '-copyts', '-start_at_zero',
+                    '-y', '-f', 'mpegts', '-i', '-', '-copyts', '-start_at_zero',
                     '-vf', 'yadif', '-an', '-c:v', 'libx265', '-preset', 'medium',
                     '-crf', '23', '-g', '90', '-f', 'mpegts', '-'
                 ]
             else:
                 # x264 の例
                 return [
-                    '-y', '-f', 'mpegts', '-i', '-', *error_resilience_opts, '-copyts', '-start_at_zero',
+                    '-y', '-f', 'mpegts', '-i', '-', '-copyts', '-start_at_zero',
                     '-vf', 'yadif', '-an', '-c:v', 'libx264', '-preset', 'slow',
                     '-crf', '23', '-g', '90', '-f', 'mpegts', '-'
                 ]
@@ -581,16 +566,50 @@ class TSReplaceEncodingTask:
                     success = await self._executeEncoding()
 
                     if success:
+                        # データベース更新とメタデータ解析を先に実行（完了通知を送る前に全ての処理を完了させる）
+                        try:
+                            await self._updateEncodedFlag()
+                            logging.info(f'Post-processing (metadata analysis) completed for: {self.encoding_task.output_file_path}')
+                        except Exception as e:
+                            logging.error(f'Post-processing failed: {e}')
+                            # メタデータ解析が失敗してもエンコード自体は成功しているため、エラーを記録するが続行する
+
+                        # エンコード完了後、RecordedScanTaskでスキャンをトリガーしてタイトルを取得できるようにする
+                        # スキャンが完了するまで待つ（タイトルを取得するため）
+                        try:
+                            from app.metadata.RecordedScanTask import RecordedScanTask
+                            import anyio
+                            import asyncio
+                            from app.models.RecordedVideo import RecordedVideo
+                            scan_task = RecordedScanTask()
+                            output_path = anyio.Path(self.encoding_task.output_file_path)
+                            if await scan_task.isFileExists(output_path):
+                                await scan_task.processRecordedFile(output_path, None, force_update=True)
+                                logging.info(f'Triggered RecordedScanTask scan for encoded file: {self.encoding_task.output_file_path}')
+                                
+                                # スキャン完了後、rec_file_idを更新するために最大5回再試行（各1秒待機）
+                                for retry_count in range(5):
+                                    recorded_video = await RecordedVideo.get_or_none(file_path=str(output_path))
+                                    if recorded_video:
+                                        if self.encoding_task.rec_file_id != recorded_video.id:
+                                            self.encoding_task.rec_file_id = recorded_video.id
+                                            await self.encoding_task.save()
+                                            logging.info(f'Updated rec_file_id to {recorded_video.id} for task {self.encoding_task.task_id} after scan')
+                                        break
+                                    elif retry_count < 4:
+                                        await asyncio.sleep(1)
+                                        logging.debug(f'Waiting for RecordedVideo to be created after scan (attempt {retry_count + 1}/5)...')
+                                    else:
+                                        logging.warning(f'RecordedVideo not found after scan for {self.encoding_task.output_file_path}')
+                        except Exception as e:
+                            logging.warning(f'Failed to trigger RecordedScanTask scan: {e}')
+                            # スキャンの失敗は致命的ではないので警告レベルで記録
+
+                        # 全ての処理が完了した後に、エンコードタスクを完了としてマーク
                         self.encoding_task.completed_at = datetime.now()
                         self.encoding_task.status = 'completed'
                         self.encoding_task.progress = 100.0
                         self._is_finished = True
-
-                        # データベース更新
-                        try:
-                            await self._updateEncodedFlag()
-                        except Exception as e:
-                            logging.error(f'Post-processing failed: {e}')
 
                         # 完了処理
                         duration = (self.encoding_task.completed_at - self.encoding_task.started_at).total_seconds()
@@ -656,7 +675,7 @@ class TSReplaceEncodingTask:
                     logging.error('This indicates the video record was deleted before encoding started')
                     return False
             else:
-                logging.warning(f'rec_file_id is 0 or not set - skipping database verification')
+                logging.warning('rec_file_id is 0 or not set - skipping database verification')
 
             # 入力ファイルの存在確認
             if not os.path.exists(self.encoding_task.input_file_path):
@@ -683,7 +702,7 @@ class TSReplaceEncodingTask:
             return True
 
         except Exception as e:
-            error_msg = f'Preparation failed: {str(e)}'
+            error_msg = f'Preparation failed: {e!s}'
             self.encoding_task.error_message = error_msg
             logging.error(error_msg, exc_info=True)
             return False
@@ -754,78 +773,30 @@ class TSReplaceEncodingTask:
                         if line_str:  # 空行をスキップ
                             stderr_data.append(line_str)
                             await self._updateProgressFromOutput(line_str)
-
-                            # PMT変更を検出
-                            if 'New PMT' in line_str or 'PMT' in line_str and 'version' in line_str:
-                                if not hasattr(self, '_pmt_change_detected'):
-                                    self._pmt_change_detected = False
-                                self._pmt_change_detected = True
-                                logging.warning(f'PMT change detected during encoding: {line_str}')
-
                             if any(keyword in line_str.lower() for keyword in ['progress', '%', 'frame=', 'time=']):
                                 logging.debug(f'Encoding error output: {line_str}')
 
             # 出力読み取りタスクを開始
-            stdout_task = asyncio.create_task(read_stdout())
-            stderr_task = asyncio.create_task(read_stderr())
+            self._stdout_task = asyncio.create_task(read_stdout())
+            self._stderr_task = asyncio.create_task(read_stderr())
 
             # 定期的な進捗更新タスクを開始
             async def periodic_progress_update():
                 start_time = time.time()
                 last_update_time = start_time
-                last_output_file_size = 0
-                last_output_file_size_time = start_time
-                stall_warning_shown = False
-
                 while self._tsreplace_process and self._tsreplace_process.returncode is None and not self._is_cancelled:
                     await asyncio.sleep(0.5)  # 0.5秒ごとに確認
                     current_time = time.time()
                     elapsed_time = current_time - start_time
 
-                    # 出力ファイルのサイズをチェック（プロセスが実際に動いているか確認）
-                    current_output_file_size = 0
-                    if os.path.exists(self.encoding_task.output_file_path):
-                        try:
-                            current_output_file_size = os.path.getsize(self.encoding_task.output_file_path)
-                        except OSError:
-                            pass
-
-                    # 出力ファイルサイズが変化している場合、プロセスは正常に動作中
-                    if current_output_file_size > last_output_file_size:
-                        last_output_file_size = current_output_file_size
-                        last_output_file_size_time = current_time
-                        stall_warning_shown = False
-
-                    # 出力ファイルサイズが5分以上変化していない場合、警告
-                    time_since_last_change = current_time - last_output_file_size_time
-                    if time_since_last_change > 300 and not stall_warning_shown:  # 5分
-                        logging.warning(f'TSReplace encoding appears to be stalled: No output file size change for {time_since_last_change:.0f}s - {os.path.basename(self.encoding_task.input_file_path)}')
-                        stall_warning_shown = True
-
-                    # プロセスが10分以上停止している場合、強制終了
-                    if time_since_last_change > 600:  # 10分
-                        logging.error(f'TSReplace encoding stalled for {time_since_last_change:.0f}s, killing process - {os.path.basename(self.encoding_task.input_file_path)}')
-                        if self._tsreplace_process:
-                            try:
-                                self._tsreplace_process.kill()
-                            except:
-                                pass
-                        break
-
                     # 時間ベースの進捗推定を定期的に更新
                     if current_time - last_update_time > 1.0:  # 1秒ごとに更新
-                        # ファイルサイズに基づく推定処理時間（より現実的な見積もり）
+                        # ファイルサイズに基づく推定処理時間
                         input_file_size = os.path.getsize(self.encoding_task.input_file_path) if os.path.exists(self.encoding_task.input_file_path) else 0
                         file_size_mb = input_file_size / (1024 * 1024) if input_file_size > 0 else 1
 
-                        # ソフトウェアエンコードとハードウェアエンコードで異なる見積もり時間
-                        if self.encoding_task.encoder_type == 'software':
-                            # ソフトウェアエンコード: MB当たり約3-5秒（より保守的な見積もり）
-                            estimated_total_time = max(file_size_mb * 4.0, 30)
-                        else:
-                            # ハードウェアエンコード: MB当たり約0.5-1秒
-                            estimated_total_time = max(file_size_mb * 0.8, 10)
-
+                        # より短い推定時間（MB当たり0.5-1秒、最低5秒）でより積極的な進捗表示
+                        estimated_total_time = max(file_size_mb * 0.8, 5)
                         time_based_progress = min((elapsed_time / estimated_total_time) * 100, 95.0)
 
                         # 進捗が1%以上増加する場合、または初回の場合は更新
@@ -837,72 +808,36 @@ class TSReplaceEncodingTask:
                             estimated_remaining = estimated_total_time - elapsed_time if estimated_total_time > elapsed_time else 0
                             eta_str = f", ETA: {estimated_remaining:.0f}s" if estimated_remaining > 0 else ""
 
-                            # 出力ファイルサイズ情報も追加
-                            output_size_mb = current_output_file_size / (1024 * 1024) if current_output_file_size > 0 else 0
-                            output_info = f", output: {output_size_mb:.1f}MB" if output_size_mb > 0 else ""
-
-                            logging.info(f'TSReplace progress: {self.encoding_task.progress:.1f}% (elapsed: {elapsed_time:.1f}s{eta_str}{output_info}) [{codec_info}] - {os.path.basename(self.encoding_task.input_file_path)}')
+                            logging.info(f'TSReplace progress: {self.encoding_task.progress:.1f}% (elapsed: {elapsed_time:.1f}s{eta_str}) [{codec_info}] - {os.path.basename(self.encoding_task.input_file_path)}')
                             last_update_time = current_time
 
-            progress_update_task = asyncio.create_task(periodic_progress_update())
+            self._progress_update_task = asyncio.create_task(periodic_progress_update())
 
             # プロセスの完了を待機
             await self._tsreplace_process.wait()
 
-            # すべてのタスクの完了を待機
-            progress_update_task.cancel()
-            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+            # すべてのタスクの完了を待機（キャンセル時はタイムアウトを設定）
+            if self._progress_update_task:
+                self._progress_update_task.cancel()
+            try:
+                # キャンセル時は短いタイムアウトで待機（大量のエラーメッセージで詰まらないように）
+                timeout = 2.0 if self._is_cancelled else None
+                await asyncio.wait_for(
+                    asyncio.gather(self._stdout_task, self._stderr_task, return_exceptions=True),
+                    timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                # タイムアウト時はタスクをキャンセル
+                if self._stdout_task and not self._stdout_task.done():
+                    self._stdout_task.cancel()
+                if self._stderr_task and not self._stderr_task.done():
+                    self._stderr_task.cancel()
+                logging.warning('Output reading tasks timed out during cancellation, forcing cancellation')
 
             stderr = b'\n'.join(line.encode('utf-8') for line in stderr_data)
 
             # 結果を確認
-            returncode = self._tsreplace_process.returncode
-
-            # Windows のクラッシュリターンコードをチェック
-            if returncode in [3221225477, -1073741819, 3221225725, -1073741571, 3221225595]:
-                # クラッシュが検出された場合、詳細情報をログに記録
-                crash_type = {
-                    3221225477: 'Access Violation (0xC0000005)',
-                    -1073741819: 'Access Violation (0xC0000005)',
-                    3221225725: 'Stack Overflow (0xC00000FD)',
-                    -1073741571: 'Stack Overflow (0xC00000FD)',
-                    3221225595: 'Illegal Instruction (0xC000001B)'
-                }.get(returncode, f'Unknown crash ({returncode})')
-
-                # クラッシュ時の進捗を記録
-                current_progress = self.encoding_task.progress
-                self._crash_progress_history.append(current_progress)
-
-                # 同じ場所（±5%以内）で複数回クラッシュしているかチェック
-                similar_crash_count = 0
-                for prev_progress in self._crash_progress_history[:-1]:  # 最新のものを除く
-                    if abs(prev_progress - current_progress) <= 5.0:  # 5%以内
-                        similar_crash_count += 1
-
-                error_msg = f'TSReplace/FFmpeg crashed with {crash_type} at {current_progress:.1f}% progress'
-
-                # 同じ場所で複数回クラッシュしている場合
-                if similar_crash_count > 0:
-                    error_msg += f' (crashed {similar_crash_count + 1} times at similar progress)'
-                    if hasattr(self, '_pmt_change_detected') and self._pmt_change_detected:
-                        error_msg += '. This recorded file contains PMT changes that consistently cause crashes.'
-                        logging.error(f'{error_msg} - This is likely a bug in tsreplace/FFmpeg when handling PMT changes in recorded files.')
-                    else:
-                        error_msg += '. This appears to be a reproducible crash at a specific point in the file.'
-                        logging.error(f'{error_msg} - Consider trying a different encoder or reporting this as a bug.')
-                else:
-                    # 初回クラッシュ
-                    if hasattr(self, '_pmt_change_detected') and self._pmt_change_detected:
-                        error_msg += ' after PMT change was detected. This may be related to stream format changes in the recorded file.'
-                        logging.error(f'{error_msg} - Retry may help, but if it crashes again at the same point, it is a tsreplace/FFmpeg bug.')
-                    else:
-                        error_msg += '. This appears to be a critical bug in the encoder.'
-                        logging.error(f'{error_msg} - Retry may not resolve the issue.')
-
-                self.encoding_task.error_message = error_msg
-                return False
-
-            if returncode == 0:
+            if self._tsreplace_process.returncode == 0:
                 # エンコード成功時にプログレスを100%に設定
                 self.encoding_task.progress = 100.0
 
@@ -922,7 +857,7 @@ class TSReplaceEncodingTask:
 
                     logging.info(f'TSReplace encoding completed [{codec_info}]: {os.path.basename(self.encoding_task.output_file_path)} - {original_mb:.1f}MB -> {encoded_mb:.1f}MB (compression: {compression_ratio:.1f}%)')
                 else:
-                    logging.info(f'TSReplace encoding process completed successfully. Progress set to 100.0%')
+                    logging.info('TSReplace encoding process completed successfully. Progress set to 100.0%')
 
                 # エンコード後の処理を実行
                 post_process_success = await self._processEncodedFile()
@@ -974,7 +909,7 @@ class TSReplaceEncodingTask:
                 return False
 
         except Exception as e:
-            error_msg = f'Encoding execution failed: {str(e)}'
+            error_msg = f'Encoding execution failed: {e!s}'
             self.encoding_task.error_message = error_msg
             logging.error(error_msg, exc_info=True)
             return False
@@ -1043,7 +978,7 @@ class TSReplaceEncodingTask:
 
         try:
             # エラーメッセージを記録
-            self.encoding_task.error_message = f'Unexpected error: {str(error)}'
+            self.encoding_task.error_message = f'Unexpected error: {error!s}'
 
             # エラーを処理
             _, processed_error_msg = await self._handleEncodingError(
@@ -1139,16 +1074,101 @@ class TSReplaceEncodingTask:
     async def _cleanupProcess(self) -> None:
         """
         プロセスのクリーンアップを行う
+        tsreplaceプロセスとその子プロセス（FFmpegなど）も含めて確実に終了させる
+        注意: メタデータ解析（ffprobe）は独立したプロセスなので、この処理では触らない
         """
 
-        if self._tsreplace_process and self._tsreplace_process.returncode is None:
+        if self._tsreplace_process:
             try:
-                self._tsreplace_process.terminate()
-                await asyncio.wait_for(self._tsreplace_process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                logging.warning('TSReplace process did not terminate gracefully, killing it')
-                self._tsreplace_process.kill()
-                await self._tsreplace_process.wait()
+                process_pid = self._tsreplace_process.pid
+                
+                # プロセスがまだ実行中の場合は終了させる
+                if self._tsreplace_process.returncode is None:
+                    logging.info(f'Terminating tsreplace process (PID: {process_pid})')
+                    self._tsreplace_process.terminate()
+                    try:
+                        await asyncio.wait_for(self._tsreplace_process.wait(), timeout=5.0)
+                        logging.info(f'TSReplace process terminated gracefully (PID: {process_pid})')
+                    except TimeoutError:
+                        logging.warning(f'TSReplace process did not terminate gracefully, killing it (PID: {process_pid})')
+                        # Windowsではkill()はterminate()と同じ動作だが、明示的にkill()を呼ぶ
+                        self._tsreplace_process.kill()
+                        try:
+                            await asyncio.wait_for(self._tsreplace_process.wait(), timeout=5.0)
+                        except TimeoutError:
+                            logging.error(f'TSReplace process still running after kill (PID: {process_pid})')
+                
+                # tsreplaceプロセスが確実に終了したことを確認してから、子プロセスのクリーンアップを行う
+                # プロセスが既に終了している場合も、子プロセスが残っている可能性があるためチェックする
+                # ただし、tsreplaceプロセスが終了してから少し待ってから子プロセスのクリーンアップを行う
+                # （メタデータ解析のffprobeプロセスと混同しないように）
+                if sys.platform == 'win32':
+                    # tsreplaceプロセスが終了したことを確認
+                    try:
+                        import psutil
+                        try:
+                            # プロセスが存在するか確認（終了していてもPIDは有効な場合がある）
+                            parent = psutil.Process(process_pid)
+                            # プロセスがまだ実行中でないことを確認
+                            if parent.is_running():
+                                # まだ実行中の場合は少し待つ
+                                await asyncio.sleep(1.0)
+                                if parent.is_running():
+                                    logging.warning(f'TSReplace process (PID: {process_pid}) is still running, skipping child process cleanup')
+                                    return
+                            
+                            # プロセスが終了していることを確認してから、子プロセスのクリーンアップを行う
+                            # 少し待ってから子プロセスをチェック（tsreplaceの子プロセスが正常に終了する時間を与える）
+                            await asyncio.sleep(0.5)
+                            
+                            # 子プロセスを取得（再帰的に）
+                            children = parent.children(recursive=True)
+                            if children:
+                                logging.info(f'Found {len(children)} child process(es) to clean up for tsreplace (PID: {process_pid})')
+                                # 子プロセスの名前をログに記録（デバッグ用）
+                                for child in children:
+                                    try:
+                                        logging.debug(f'Child process: PID={child.pid}, name={child.name()}')
+                                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                        pass
+                                
+                                # tsreplaceの子プロセス（FFmpegなど）のみを終了
+                                # ffprobeなどの独立したプロセスは終了しない
+                                for child in children:
+                                    try:
+                                        child_name = child.name().lower()
+                                        # tsreplaceの子プロセスとして想定されるプロセス名をチェック
+                                        if any(name in child_name for name in ['ffmpeg', 'qsv', 'nvenc', 'vce', 'tsreplace']):
+                                            logging.info(f'Terminating tsreplace child process (PID: {child.pid}, name: {child.name()})')
+                                            child.terminate()
+                                        else:
+                                            logging.debug(f'Skipping child process (not tsreplace related): PID={child.pid}, name={child.name()}')
+                                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                        pass
+                                
+                                # 子プロセスの終了を待機
+                                gone, alive = psutil.wait_procs(children, timeout=5.0)
+                                for child in alive:
+                                    try:
+                                        child_name = child.name().lower()
+                                        if any(name in child_name for name in ['ffmpeg', 'qsv', 'nvenc', 'vce', 'tsreplace']):
+                                            logging.warning(f'Killing tsreplace child process that did not terminate (PID: {child.pid}, name: {child.name()})')
+                                            child.kill()
+                                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                        pass
+                        except psutil.NoSuchProcess:
+                            # 親プロセスが既に終了している場合は子プロセスのクリーンアップは不要
+                            pass
+                    except ImportError:
+                        logging.warning('psutil not available, cannot clean up child processes')
+                    except Exception as e:
+                        logging.warning(f'Failed to clean up child processes: {e}')
+                
+            except Exception as ex:
+                logging.error(f'Error during process cleanup: {ex}', exc_info=ex)
+            finally:
+                # プロセス参照をクリア
+                self._tsreplace_process = None
 
 
     async def cancel(self) -> None:
@@ -1159,12 +1179,20 @@ class TSReplaceEncodingTask:
         self._is_cancelled = True
         self.encoding_task.status = 'cancelled'
 
+        # 出力読み取りタスクを即座にキャンセル（大量のエラーメッセージで詰まらないように）
+        if self._stdout_task and not self._stdout_task.done():
+            self._stdout_task.cancel()
+        if self._stderr_task and not self._stderr_task.done():
+            self._stderr_task.cancel()
+        if self._progress_update_task and not self._progress_update_task.done():
+            self._progress_update_task.cancel()
+
         if self._tsreplace_process and self._tsreplace_process.returncode is None:
             try:
                 logging.info(f'Cancelling TSReplace encoding process for task: {self.encoding_task.task_id}')
                 self._tsreplace_process.terminate()
                 await asyncio.wait_for(self._tsreplace_process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logging.warning('TSReplace process did not terminate gracefully, killing it')
                 self._tsreplace_process.kill()
                 await self._tsreplace_process.wait()
@@ -1216,29 +1244,6 @@ class TSReplaceEncodingTask:
         """エラーがリトライ可能かを判定する"""
         if retry_count >= max_retries:
             return False
-
-        # CRASHカテゴリの場合の特別処理
-        if error_category == 'CRASH':
-            # 同じ場所で2回以上クラッシュしている場合、リトライしない
-            if len(self._crash_progress_history) >= 2:
-                current_progress = self._crash_progress_history[-1]
-                prev_progress = self._crash_progress_history[-2]
-                if abs(current_progress - prev_progress) <= 5.0:  # 5%以内の差
-                    logging.warning(f'Crash occurred at similar progress ({prev_progress:.1f}% -> {current_progress:.1f}%) - this is likely a reproducible bug, skipping retry')
-                    return False
-
-            # PMT変更が検出されていた場合、1回だけリトライ
-            if hasattr(self, '_pmt_change_detected') and self._pmt_change_detected:
-                if retry_count == 0:
-                    logging.info('Crash occurred after PMT change - will retry once as this may be recoverable')
-                    return True
-                else:
-                    logging.warning('Already retried after PMT change crash - skipping further retries')
-                    return False
-            else:
-                logging.warning('Crash occurred without PMT change - likely a critical bug, skipping retry')
-                return False
-
         return error_category in self.RETRYABLE_CATEGORIES
 
     def _getRetryDelay(self, error_category: str, retry_count: int) -> int:
@@ -1251,13 +1256,12 @@ class TSReplaceEncodingTask:
             'STREAM_CHANGE': 5,
             'VCEENCC_PARAM': 3,
             'FFMPEG_STREAM': 3,
-            'CRASH': 10,  # クラッシュ後は少し待機してからリトライ
         }
         base_delay = base_delays.get(error_category, 10)
         delay = min(base_delay * (2 ** retry_count), 300)
         return delay
 
-    async def _handleEncodingError(self, task: EncodingTask, error: Exception) -> Tuple[bool, str]:
+    async def _handleEncodingError(self, task: EncodingTask, error: Exception) -> tuple[bool, str]:
         """エンコードエラーを処理し、適切な対応を決定する"""
         error_message = str(error)
         error_category = self._categorizeError(error_message)
@@ -1325,12 +1329,19 @@ class TSReplaceEncodingTask:
         """
         try:
             if self.encoding_task.rec_file_id > 0:
-                from app.models.RecordedVideo import RecordedVideo
-                from app.metadata.KeyFrameAnalyzer import KeyFrameAnalyzer
                 from app.metadata.CMSectionsDetector import CMSectionsDetector
+                from app.metadata.KeyFrameAnalyzer import KeyFrameAnalyzer
+                from app.models.RecordedVideo import RecordedVideo
+                from tortoise.exceptions import DoesNotExist
 
                 # データベースレコードを取得
-                recorded_video = await RecordedVideo.get(id=self.encoding_task.rec_file_id)
+                try:
+                    recorded_video = await RecordedVideo.get(id=self.encoding_task.rec_file_id)
+                except DoesNotExist:
+                    # rec_file_idが見つからない場合、RecordedScanTaskがスキャンするまで待つ
+                    # スキャンはエンコード完了時にトリガーされるため、メタデータ解析をスキップ
+                    logging.warning(f'RecordedVideo not found for rec_file_id={self.encoding_task.rec_file_id}. Skipping metadata update. Metadata will be available after scan.')
+                    return
 
                 # 元のファイルパスを記録（ログ用）
                 original_file_path = recorded_video.file_path
@@ -1374,8 +1385,28 @@ class TSReplaceEncodingTask:
 
                 # エンコード済みファイルのメタデータ解析を実行
                 try:
+                    # ファイル名に_h264, _h265, _av1が含まれているかで判定
+                    # _processEncodedFileで移動された後のパスを使用（_h264.tsのまま）
                     output_file_path = Path(self.encoding_task.output_file_path)
-                    logging.info(f'Analyzing metadata for encoded file: {self.encoding_task.output_file_path}')
+                    
+                    # ファイルが移動されている可能性があるため、ファイル名パターンで検索
+                    # _h264.tsで出力されるので、そのパスを探す
+                    if '_h264' in output_file_path.name or '_h265' in output_file_path.name or '_av1' in output_file_path.name:
+                        # ベース名（_h264.ts）を取得（_1などを除去）
+                        import re
+                        base_name = output_file_path.name
+                        base_name_without_counter = re.sub(r'_\d+\.ts$', '.ts', base_name)
+                        base_path = output_file_path.parent / base_name_without_counter
+                        
+                        # ベース名のファイルが存在する場合はそれを使用（_h264.ts）
+                        if base_path.exists():
+                            output_file_path = base_path
+                            logging.info(f'Analyzing metadata for encoded file: {base_path}')
+                        else:
+                            # ベース名が存在しない場合は元のパスを使用
+                            logging.info(f'Analyzing metadata for encoded file: {self.encoding_task.output_file_path}')
+                    else:
+                        logging.info(f'Analyzing metadata for encoded file: {self.encoding_task.output_file_path}')
 
                     # キーフレーム情報とCM区間情報を個別に解析（一つが失敗しても他に影響しないように）
                     try:
@@ -1399,15 +1430,15 @@ class TSReplaceEncodingTask:
                     logging.error(f'Failed to analyze encoded file metadata: {self.encoding_task.output_file_path}')
                     logging.warning(f'Failed to analyze metadata for encoded file: {metadata_error}', exc_info=True)
                     # メタデータ解析の失敗をキャッチして再度例外を投げる
-                    raise Exception(f'Post-processing failed')
+                    raise Exception('Post-processing failed')
 
             else:
-                logging.warning(f'Cannot update encoded flag - rec_file_id is 0 or not set')
+                logging.warning('Cannot update encoded flag - rec_file_id is 0 or not set')
 
         except Exception as e:
             logging.error(f'Failed to update encoded flag: {e}', exc_info=True)
 
-    def _logEncodingComplete(self, task: EncodingTask, success: bool, duration: Optional[float] = None) -> None:
+    def _logEncodingComplete(self, task: EncodingTask, success: bool, duration: float | None = None) -> None:
         """エンコード完了をログに記録する"""
         try:
             log_entry = {
@@ -1448,7 +1479,7 @@ class TSReplaceEncodingTask:
         except Exception as e:
             logging.error(f'Failed to log encoding completion: {e}', exc_info=True)
 
-    def _logEncodingError(self, task: EncodingTask, error: Exception, error_category: Optional[str] = None) -> None:
+    def _logEncodingError(self, task: EncodingTask, error: Exception, error_category: str | None = None) -> None:
         """エンコードエラーをログに記録する"""
         try:
             log_entry = {
@@ -1467,14 +1498,14 @@ class TSReplaceEncodingTask:
                 'status': task.status
             }
 
-            message = f'Encoding error - Task: {task.task_id}, Error: {str(error)}'
+            message = f'Encoding error - Task: {task.task_id}, Error: {error!s}'
             if error_category:
                 message += f', Category: {error_category}'
             message += f', Retry: {task.retry_count}/{task.max_retry_count}'
 
             self._writeTextLog(self.error_log_path, 'ERROR', message)
             self._writeJsonLog(self.error_json_log_path, log_entry)
-            logging.error(f'TSReplace encoding error: {task.task_id} - {str(error)}', exc_info=True)
+            logging.error(f'TSReplace encoding error: {task.task_id} - {error!s}', exc_info=True)
 
         except Exception as e:
             logging.error(f'Failed to log encoding error: {e}', exc_info=True)
@@ -1491,7 +1522,7 @@ class TSReplaceEncodingTask:
         except Exception as e:
             logging.error(f'Failed to write text log to {log_path}: {e}')
 
-    def _writeJsonLog(self, log_path: Path, log_entry: Dict[str, Any]) -> None:
+    def _writeJsonLog(self, log_path: Path, log_entry: dict[str, Any]) -> None:
         """JSON形式のログを書き込む（JSONL形式）"""
         try:
             json_line = json.dumps(log_entry, ensure_ascii=False, default=str) + '\n'
@@ -1534,7 +1565,7 @@ class TSReplaceEncodingTask:
             # エンコード済みファイルを適切なフォルダに移動
             final_output_path = await self._moveEncodedFileToDestination()
             if not final_output_path:
-                logging.error(f'Failed to move encoded file to destination')
+                logging.error('Failed to move encoded file to destination')
                 return False
 
             # データベースを簡略更新（元ファイルのメタデータを保持）
@@ -1542,14 +1573,14 @@ class TSReplaceEncodingTask:
                 # 元ファイルパスを削除処理のために保存
                 original_file_path_for_deletion = original_video.file_path
 
-                logging.info(f'Updating database with TSReplace encoding information (preserving original metadata)')
+                logging.info('Updating database with TSReplace encoding information (preserving original metadata)')
                 success = await self._updateDatabaseSimple(original_video, final_output_path)
                 if not success:
-                    logging.error(f'Failed to update database with encoded file information')
+                    logging.error('Failed to update database with encoded file information')
                     return False
 
                 # サムネイル処理：元ファイルと同じ内容なので既存サムネイルをそのまま使用
-                logging.info(f'Using existing thumbnails from original file (no regeneration needed)')
+                logging.info('Using existing thumbnails from original file (no regeneration needed)')
 
                 # 元ファイルの削除・保持処理
                 if self.delete_original:
@@ -1560,11 +1591,11 @@ class TSReplaceEncodingTask:
                 # エンコード完了をログに記録
                 logging.info(f'TSReplace encoding completed successfully. Original: {original_file_path_for_deletion} -> Encoded: {final_output_path}')
             else:
-                logging.warning(f'Skipping database update due to missing original video record')
+                logging.warning('Skipping database update due to missing original video record')
                 logging.info(f'Encoded file created successfully: {final_output_path}')
 
                 if self.delete_original:
-                    logging.warning(f'Cannot delete original file - original video record not found')
+                    logging.warning('Cannot delete original file - original video record not found')
 
             logging.info(f'Post-processing completed successfully for: {final_output_path}')
             return True
@@ -1706,13 +1737,18 @@ class TSReplaceEncodingTask:
             original_file = Path(self.encoding_task.output_file_path)
             destination_file = encoded_folder_path / original_file.name
 
-            # 同名ファイルが存在する場合は番号を付ける
-            counter = 1
-            while destination_file.exists():
-                stem = original_file.stem
-                suffix = original_file.suffix
-                destination_file = encoded_folder_path / f"{stem}_{counter}{suffix}"
-                counter += 1
+            # エンコード済みファイル（_h264, _h265, _av1を含む）の場合は、_1を付けずに_h264.tsのまま出力
+            # 同名ファイルが存在する場合は上書きする
+            is_encoded_file = '_h264' in original_file.name or '_h265' in original_file.name or '_av1' in original_file.name
+            
+            # エンコード済みファイルでない場合のみ、同名ファイルが存在する場合は番号を付ける
+            if not is_encoded_file:
+                counter = 1
+                while destination_file.exists():
+                    stem = original_file.stem
+                    suffix = original_file.suffix
+                    destination_file = encoded_folder_path / f"{stem}_{counter}{suffix}"
+                    counter += 1
 
             # ファイルを移動
             logging.info(f'Moving encoded file from {self.encoding_task.output_file_path} to {destination_file}')
@@ -1732,9 +1768,16 @@ class TSReplaceEncodingTask:
             video_title = 'Unknown Video'
             try:
                 if self.encoding_task.rec_file_id > 0:
+                    from app.models.RecordedVideo import RecordedVideo
                     from app.models.RecordedProgram import RecordedProgram
-                    recorded_program = await RecordedProgram.get(id=self.encoding_task.rec_file_id)
-                    video_title = recorded_program.title or 'Unknown Video'
+                    try:
+                        recorded_video = await RecordedVideo.get(id=self.encoding_task.rec_file_id)
+                        recorded_program = await RecordedProgram.get(id=recorded_video.recorded_program_id)
+                        video_title = recorded_program.title or 'Unknown Video'
+                    except DoesNotExist:
+                        # RecordedVideoが見つからない場合、RecordedScanTaskがスキャンするまで待つ
+                        # スキャンはエンコード完了時にトリガーされるため、後でタイトルが取得できる
+                        logging.debug(f'RecordedVideo not found for rec_file_id={self.encoding_task.rec_file_id}. Title will be available after scan.')
             except Exception as e:
                 logging.warning(f'Failed to get video title for notification: {e}')
 
@@ -1774,9 +1817,16 @@ class TSReplaceEncodingTask:
             video_title = 'Unknown Video'
             try:
                 if self.encoding_task.rec_file_id > 0:
+                    from app.models.RecordedVideo import RecordedVideo
                     from app.models.RecordedProgram import RecordedProgram
-                    recorded_program = await RecordedProgram.get(id=self.encoding_task.rec_file_id)
-                    video_title = recorded_program.title or 'Unknown Video'
+                    try:
+                        recorded_video = await RecordedVideo.get(id=self.encoding_task.rec_file_id)
+                        recorded_program = await RecordedProgram.get(id=recorded_video.recorded_program_id)
+                        video_title = recorded_program.title or 'Unknown Video'
+                    except DoesNotExist:
+                        # RecordedVideoが見つからない場合、RecordedScanTaskがスキャンするまで待つ
+                        # スキャンはエンコード完了時にトリガーされるため、後でタイトルが取得できる
+                        logging.debug(f'RecordedVideo not found for rec_file_id={self.encoding_task.rec_file_id}. Title will be available after scan.')
             except Exception as e:
                 logging.warning(f'Failed to get video title for notification: {e}')
 

@@ -92,18 +92,12 @@
                         ソフトウェアエンコードを使用してください。
                     </v-alert>
 
-                    <v-alert v-if="program?.recorded_video.is_tsreplace_encoded" type="error" variant="tonal"
+                    <v-alert v-if="program?.recorded_video.is_tsreplace_encoded" type="warning" variant="tonal"
                         class="mt-4">
                         <template v-slot:title>再エンコード済みの動画です</template>
                         この録画ファイルは既に再エンコード済みです。<br>
-                        再エンコード済みの動画は再度エンコードできません。
-                    </v-alert>
-
-                    <v-alert v-else-if="program?.recorded_video.video_codec !== 'MPEG-2'" type="info" variant="tonal"
-                        class="mt-4">
-                        <template v-slot:title>既にエンコード済みのファイルです</template>
-                        この録画ファイルは既に {{ program?.recorded_video.video_codec }} でエンコードされています。<br>
-                        再エンコードすると画質が劣化する可能性があります。
+                        再エンコードすると画質が劣化する可能性があります。<br>
+                        元ファイルが削除されている場合、エンコード済みファイルから再エンコードされます。
                     </v-alert>
 
                     <v-row class="mt-4">
@@ -239,7 +233,7 @@ const qualityPresetOptions = [
 const canStartEncoding = computed(() => {
     if (isEncoding.value) return false;
     if (!props.program) return false;
-    if (props.program.recorded_video.is_tsreplace_encoded) return false; // 再エンコード済みの場合は無効
+    // 再エンコード済みでも再エンコードを許可（画質劣化の可能性があることを警告で表示）
     if (selectedEncoderType.value === 'hardware' && !hardwareEncoderAvailable.value) return false;
     return true;
 });
@@ -293,8 +287,8 @@ const startEncoding = async () => {
         // サーバーからのエラーメッセージを確認
         if (error?.response?.data?.detail) {
             const detail = error.response.data.detail;
-            if (detail === 'Cannot re-encode already encoded video') {
-                Message.error('再エンコード済みの動画は再度エンコードできません。');
+            if (detail === 'Neither original nor encoded file exists') {
+                Message.error('元ファイルもエンコード済みファイルも存在しません。');
             } else {
                 Message.error(`エンコードの開始に失敗しました: ${detail}`);
             }

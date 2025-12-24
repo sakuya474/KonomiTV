@@ -1,6 +1,6 @@
 
 import json
-import pathlib
+import os
 from email.utils import parsedate
 from typing import Annotated, Any, Literal
 
@@ -26,7 +26,7 @@ from app.metadata.RecordedScanTask import RecordedScanTask
 from app.metadata.ThumbnailGenerator import ThumbnailGenerator
 from app.models.RecordedProgram import RecordedProgram
 from app.models.User import User
-from app.routers.UsersRouter import GetCurrentAdminUser, GetCurrentUser
+from app.routers.UsersRouter import GetCurrentAdminUser
 from app.utils.DriveIOLimiter import DriveIOLimiter
 from app.utils.JikkyoClient import JikkyoClient
 
@@ -34,32 +34,58 @@ from app.utils.JikkyoClient import JikkyoClient
 def _build_encoded_folder_filter() -> tuple[str, list[str]]:
     """
     encodedフォルダ内のファイルを除外するSQLフィルタを構築する
+    encoded_folderがrecorded_foldersと同じフォルダの場合は、エンコード済みファイル（_h264.tsや_hevc.tsで終わるファイル）のみを除外する
 
     Returns:
         tuple[str, list[str]]: (WHERE句の文字列, パラメータのリスト)
     """
     config = Config()
     encoded_folders = []
+    encoded_folder_same_as_recorded = False
 
     # メイン設定のencodedフォルダ
     if config.tsreplace_encoding.encoded_folder:
-        encoded_folders.append(config.tsreplace_encoding.encoded_folder)
+        encoded_folder_path = str(config.tsreplace_encoding.encoded_folder).rstrip('/\\')
+        # encoded_folderがrecorded_foldersと同じフォルダかどうかをチェック
+        for recorded_folder in config.video.recorded_folders:
+            recorded_folder_normalized = str(recorded_folder).rstrip('/\\')
+            # パスの正規化（大文字小文字を区別しない）
+            if encoded_folder_path.lower() == recorded_folder_normalized.lower():
+                encoded_folder_same_as_recorded = True
+                break
+        if not encoded_folder_same_as_recorded:
+            encoded_folders.append(encoded_folder_path)
 
     # 各録画フォルダ内のEncodedサブフォルダ
     for recorded_folder in config.video.recorded_folders:
-        encoded_subfolder = f"{recorded_folder}/Encoded"
-        encoded_folders.append(encoded_subfolder)
+        recorded_folder_str = str(recorded_folder)
+        encoded_subfolder = f"{recorded_folder_str}/Encoded"
+        encoded_folders.append(encoded_subfolder.rstrip('/\\'))
         # Windowsパス区切り文字にも対応
-        encoded_subfolder_win = f"{recorded_folder}\\Encoded"
-        encoded_folders.append(encoded_subfolder_win)
+        encoded_subfolder_win = f"{recorded_folder_str}\\Encoded"
+        encoded_folders.append(encoded_subfolder_win.rstrip('/\\'))
 
-    if not encoded_folders:
-        return "", []
-
-    # SQLのLIKE条件を構築（各encodedフォルダパターンをORで結合）
+    # SQLのLIKE条件を構築
     like_conditions = []
     params = []
 
+    # encoded_folderがrecorded_foldersと同じフォルダの場合は、エンコード済みファイルのみを除外
+    # ただし、is_original_file_deleted = 1のレコード（元ファイルが削除されてエンコード済みファイルのみが残っている場合）は除外しない
+    if encoded_folder_same_as_recorded:
+        # エンコード済みファイル（_h264.tsや_hevc.tsで終わるファイル）を除外
+        # ただし、is_original_file_deleted = 1のレコードは除外しない
+        # 条件: file_pathが_h264.tsで終わる AND is_original_file_deleted != 1 の場合のみ除外
+        like_conditions.append("NOT (rv.file_path LIKE ? AND (rv.is_original_file_deleted = 0 OR rv.is_original_file_deleted IS NULL))")
+        params.append("%_h264.ts")
+        like_conditions.append("NOT (rv.file_path LIKE ? AND (rv.is_original_file_deleted = 0 OR rv.is_original_file_deleted IS NULL))")
+        params.append("%_hevc.ts")
+        # Windows形式のパスにも対応
+        like_conditions.append("NOT (rv.file_path LIKE ? AND (rv.is_original_file_deleted = 0 OR rv.is_original_file_deleted IS NULL))")
+        params.append("%_h264.TS")
+        like_conditions.append("NOT (rv.file_path LIKE ? AND (rv.is_original_file_deleted = 0 OR rv.is_original_file_deleted IS NULL))")
+        params.append("%_hevc.TS")
+
+    # 独立したencodedフォルダの場合は、フォルダ全体を除外
     for folder in encoded_folders:
         # パスの正規化（末尾のスラッシュを統一）
         normalized_folder = folder.rstrip('/\\')
@@ -71,6 +97,9 @@ def _build_encoded_folder_filter() -> tuple[str, list[str]]:
         # Windows形式のパス
         like_conditions.append("rv.file_path NOT LIKE ?")
         params.append(f"{normalized_folder}\\%")
+
+    if not like_conditions:
+        return "", []
 
     where_clause = f"AND ({' AND '.join(like_conditions)})"
     return where_clause, params
@@ -98,11 +127,37 @@ async def ConvertRowToRecordedProgram(row: dict[str, Any]) -> schemas.RecordedPr
     if row['cm_sections'] is not None:
         cm_sections = json.loads(row['cm_sections'])
 
+    # TSReplace エンコード関連フィールドの処理
+    # DBの値をそのまま使用（ファイルが存在しないからといってNoneにしない）
+    encoded_file_path_db = row['encoded_file_path'] if row['encoded_file_path'] and row['encoded_file_path'].strip() else None
+
+    # エンコード済みファイルを優先表示するため、file_pathを決定
+    # 元ファイルのレコードでencoded_file_pathが存在し、ファイルが存在する場合は、encoded_file_pathを使用
+    display_file_path = row['file_path']
+    if encoded_file_path_db and os.path.exists(encoded_file_path_db):
+        # エンコード済みファイルが存在する場合は、それを表示用のfile_pathとして使用
+        display_file_path = encoded_file_path_db
+        is_tsreplace_encoded = True
+        encoded_file_path = None  # 表示用file_pathがエンコード済みファイルなので、encoded_file_pathはNone
+    elif encoded_file_path_db:
+        # エンコード済みファイルがDB上に存在するが、ファイルが存在しない場合
+        is_tsreplace_encoded = False
+        encoded_file_path = encoded_file_path_db
+    else:
+        # エンコード済みファイル自体の場合：encoded_file_path IS NULL（DB上）
+        # DBの値またはファイル名で判定
+        is_tsreplace_encoded_db = bool(row['is_tsreplace_encoded'])
+        file_path = row['file_path']
+        filename = os.path.basename(file_path) if file_path else ''
+        is_encoded_by_filename = '_h264' in filename or '_h265' in filename or '_av1' in filename
+        is_tsreplace_encoded = is_tsreplace_encoded_db or is_encoded_by_filename
+        encoded_file_path = None
+
     # recorded_video のデータを構築
     recorded_video_dict = {
         'id': row['rv_id'],
         'status': row['status'],
-        'file_path': row['file_path'],
+        'file_path': display_file_path,  # エンコード済みファイルを優先表示
         'file_hash': row['file_hash'],
         'file_size': row['file_size'],
         'file_created_at': row['file_created_at'],
@@ -125,13 +180,16 @@ async def ConvertRowToRecordedProgram(row: dict[str, Any]) -> schemas.RecordedPr
         'secondary_audio_sampling_rate': row['secondary_audio_sampling_rate'],
         'has_key_frames': has_key_frames,
         'cm_sections': cm_sections,
-        # TSReplace エンコード関連フィールド
-        'is_tsreplace_encoded': bool(row['is_tsreplace_encoded']),
+    }
+
+    recorded_video_dict.update({
+        'is_tsreplace_encoded': is_tsreplace_encoded,
         'tsreplace_encoded_at': row['tsreplace_encoded_at'],
         'original_video_codec': row['original_video_codec'],
+        'encoded_file_path': encoded_file_path,
         'created_at': row['rv_created_at'],
         'updated_at': row['rv_updated_at'],
-    }
+    })
 
     # channel のデータを構築 (channel_id が存在する場合のみ)
     channel_dict: dict[str, Any] | None = None
@@ -190,21 +248,137 @@ async def ConvertRowToRecordedProgram(row: dict[str, Any]) -> schemas.RecordedPr
 
 
 async def GetRecordedProgram(video_id: Annotated[int, Path(description='録画番組の ID 。')]) -> RecordedProgram:
-    """ 録画番組 ID から録画番組情報を取得する """
+    """ 録画番組 ID から録画番組情報を取得する（エンコード済みファイルを優先） """
 
-    # 録画番組情報を取得
-    recorded_program = await RecordedProgram.all() \
-        .select_related('recorded_video') \
-        .select_related('channel') \
-        .get_or_none(id=video_id)
-    if recorded_program is None:
-        logging.error(f'[VideosRouter][GetRecordedProgram] Specified video_id was not found. [video_id: {video_id}]')
+    # 生 SQL クエリでエンコード済みファイルを優先して取得
+    query = """
+        SELECT
+            rp.id AS rp_id,
+            rp.recording_start_margin,
+            rp.recording_end_margin,
+            rp.is_partially_recorded,
+            rp.channel_id,
+            rp.network_id,
+            rp.service_id,
+            rp.event_id,
+            rp.series_id,
+            rp.series_broadcast_period_id,
+            rp.title,
+            rp.series_title,
+            rp.episode_number,
+            rp.subtitle,
+            rp.description,
+            rp.detail,
+            rp.start_time,
+            rp.end_time,
+            rp.duration,
+            rp.is_free,
+            rp.genres,
+            rp.primary_audio_type,
+            rp.primary_audio_language,
+            rp.secondary_audio_type,
+            rp.secondary_audio_language,
+            rp.created_at,
+            rp.updated_at,
+            rv.id AS rv_id,
+            rv.status,
+            rv.file_path,
+            rv.file_hash,
+            rv.file_size,
+            rv.file_created_at,
+            rv.file_modified_at,
+            rv.recording_start_time,
+            rv.recording_end_time,
+            rv.duration AS video_duration,
+            rv.container_format,
+            rv.video_codec,
+            rv.video_codec_profile,
+            rv.video_scan_type,
+            rv.video_frame_rate,
+            rv.video_resolution_width,
+            rv.video_resolution_height,
+            rv.primary_audio_codec,
+            rv.primary_audio_channel,
+            rv.primary_audio_sampling_rate,
+            rv.secondary_audio_codec,
+            rv.secondary_audio_channel,
+            rv.secondary_audio_sampling_rate,
+            CASE WHEN rv.key_frames != '[]' THEN 1 ELSE 0 END AS has_key_frames,
+            rv.cm_sections,
+            rv.is_tsreplace_encoded,
+            rv.tsreplace_encoded_at,
+            rv.original_video_codec,
+            rv.encoded_file_path,
+            rv.created_at AS rv_created_at,
+            rv.updated_at AS rv_updated_at,
+            ch.id AS ch_id,
+            ch.display_channel_id,
+            ch.network_id AS ch_network_id,
+            ch.service_id AS ch_service_id,
+            ch.transport_stream_id,
+            ch.remocon_id,
+            ch.channel_number,
+            ch.type,
+            ch.name AS ch_name,
+            ch.jikkyo_force,
+            ch.is_subchannel,
+            ch.is_radiochannel,
+            ch.is_watchable
+        FROM recorded_programs rp
+        JOIN (
+            SELECT rv.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY rv.recorded_program_id
+                       ORDER BY
+                           -- エンコード済みファイルを優先
+                           -- 元ファイル（encoded_file_path IS NOT NULL）は後回しにする
+                           CASE
+                               WHEN rv.encoded_file_path IS NOT NULL THEN 1  -- 元ファイルは後回し
+                               WHEN (rv.file_path LIKE '%_h264%' OR rv.file_path LIKE '%_h265%' OR rv.file_path LIKE '%_av1%') OR
+                                    rv.is_original_file_deleted = 1 THEN 0  -- エンコード済みファイルを優先
+                               ELSE 1
+                           END,
+                           rv.id DESC
+                   ) AS rn
+            FROM recorded_videos rv
+        ) rv ON rp.id = rv.recorded_program_id AND rv.rn = 1
+        LEFT JOIN channels ch ON rp.channel_id = ch.id
+        WHERE rp.id = ?
+    """
+
+    try:
+        # データベースから直接クエリを実行
+        conn = connections.get('default')
+        rows = await conn.execute_query(query, [str(video_id)])
+
+        if not rows[1] or len(rows[1]) == 0:
+            logging.error(f'[VideosRouter][GetRecordedProgram] Specified video_id was not found. [video_id: {video_id}]')
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'Specified video_id was not found',
+            )
+
+        # SQLクエリで取得したrecorded_video_idを使って、正しいRecordedProgramを取得
+        # 複数のRecordedVideoがある場合でも、SQLクエリで既に正しいものを選択している
+        row = rows[1][0]
+        recorded_video_id = row['rv_id']
+
+        # RecordedProgramを取得（正しいRecordedVideoが関連付けられるようにrecorded_video_idで絞り込み）
+        recorded_program = await RecordedProgram.all() \
+            .select_related('recorded_video', 'channel') \
+            .filter(recorded_video__id=recorded_video_id) \
+            .get(id=video_id)
+
+        return recorded_program
+
+    except HTTPException:
+        raise
+    except Exception as ex:
+        logging.error(f'[VideosRouter][GetRecordedProgram] Failed to get recorded program: {ex}', exc_info=ex)
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail = 'Specified video_id was not found',
+            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail = f'Failed to get recorded program: {ex!s}',
         )
-
-    return recorded_program
 
 
 async def GetThumbnailResponse(
@@ -220,7 +394,7 @@ async def GetThumbnailResponse(
     Args:
         request (Request): FastAPI のリクエストオブジェクト
         recorded_program (RecordedProgram): 録画番組情報
-        is_tile (bool, optional): シークバー用タイル画像かどうか. Defaults to False.
+        return_tiled (bool, optional): シークバー用タイル画像かどうか. Defaults to False.
 
     Returns:
         Union[FileResponse, Response]: サムネイル画像のレスポンス
@@ -366,6 +540,7 @@ async def VideosAPI(
     """
 
     # 生 SQL クエリを構築
+    # 同じ recorded_program_id に対して複数の recorded_videos がある場合、エンコード済みファイルを優先する
     base_query = """
         SELECT
             rp.id AS rp_id,
@@ -426,6 +601,7 @@ async def VideosAPI(
             rv.is_tsreplace_encoded,
             rv.tsreplace_encoded_at,
             rv.original_video_codec,
+            rv.encoded_file_path,
             rv.created_at AS rv_created_at,
             rv.updated_at AS rv_updated_at,
             ch.id AS ch_id,
@@ -442,7 +618,23 @@ async def VideosAPI(
             ch.is_radiochannel,
             ch.is_watchable
         FROM recorded_programs rp
-        JOIN recorded_videos rv ON rp.id = rv.recorded_program_id
+        JOIN (
+            SELECT rv.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY rv.recorded_program_id
+                       ORDER BY
+                           -- エンコード済みファイルを優先
+                           -- 元ファイル（encoded_file_path IS NOT NULL）は後回しにする
+                           CASE
+                               WHEN rv.encoded_file_path IS NOT NULL THEN 1  -- 元ファイルは後回し
+                               WHEN (rv.file_path LIKE '%_h264%' OR rv.file_path LIKE '%_h265%' OR rv.file_path LIKE '%_av1%') OR
+                                    rv.is_original_file_deleted = 1 THEN 0  -- エンコード済みファイルを優先
+                               ELSE 1
+                           END,
+                           rv.id DESC
+                   ) AS rn
+            FROM recorded_videos rv
+        ) rv ON rp.id = rv.recorded_program_id AND rv.rn = 1
         LEFT JOIN channels ch ON rp.channel_id = ch.id
         WHERE 1=1
         {where_clause}
@@ -474,11 +666,26 @@ async def VideosAPI(
             )
             params = [*target_ids, *encoded_params, str(PAGE_SIZE), '0']  # OFFSET は 0 固定
 
-            # 総数を取得
+            # 総数を取得（エンコード済みファイルを優先）
             total_query = f"""
-                SELECT COUNT(*) as count
+                SELECT COUNT(DISTINCT rp.id) as count
                 FROM recorded_programs rp
-                JOIN recorded_videos rv ON rp.id = rv.recorded_program_id
+                JOIN (
+                    SELECT rv.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY rv.recorded_program_id
+                               ORDER BY
+                                   CASE
+                                       WHEN (rv.encoded_file_path IS NULL AND rv.is_tsreplace_encoded = 1) OR
+                                            (rv.file_path LIKE '%_h264%' OR rv.file_path LIKE '%_h265%' OR rv.file_path LIKE '%_av1%') OR
+                                            rv.is_original_file_deleted = 1
+                                       THEN 0
+                                       ELSE 1
+                                   END,
+                                   rv.id DESC
+                           ) AS rn
+                    FROM recorded_videos rv
+                ) rv ON rp.id = rv.recorded_program_id AND rv.rn = 1
                 WHERE rp.id IN ({','.join(['?' for _ in ids])}) {encoded_filter}
             """
             total_params = [*ids, *encoded_params]
@@ -491,11 +698,26 @@ async def VideosAPI(
             )
             params = [*ids, *encoded_params, str(PAGE_SIZE), str((page - 1) * PAGE_SIZE)]
 
-            # 総数を取得
+            # 総数を取得（エンコード済みファイルを優先）
             total_query = f"""
-                SELECT COUNT(*) as count
+                SELECT COUNT(DISTINCT rp.id) as count
                 FROM recorded_programs rp
-                JOIN recorded_videos rv ON rp.id = rv.recorded_program_id
+                JOIN (
+                    SELECT rv.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY rv.recorded_program_id
+                               ORDER BY
+                                   CASE
+                                       WHEN (rv.encoded_file_path IS NULL AND rv.is_tsreplace_encoded = 1) OR
+                                            (rv.file_path LIKE '%_h264%' OR rv.file_path LIKE '%_h265%' OR rv.file_path LIKE '%_av1%') OR
+                                            rv.is_original_file_deleted = 1
+                                       THEN 0
+                                       ELSE 1
+                                   END,
+                                   rv.id DESC
+                           ) AS rn
+                    FROM recorded_videos rv
+                ) rv ON rp.id = rv.recorded_program_id AND rv.rn = 1
                 WHERE rp.id IN ({','.join(['?' for _ in ids])}) {encoded_filter}
             """
             total_params = [*ids, *encoded_params]
@@ -508,12 +730,13 @@ async def VideosAPI(
         )
         params = [*encoded_params, str(PAGE_SIZE), str((page - 1) * PAGE_SIZE)]
 
-        # 総数を取得
+        # 総数を取得（エンコード済みファイルを優先）
         total_query = f"""
-            SELECT COUNT(*) as count
+            SELECT COUNT(DISTINCT rp.id) as count
             FROM recorded_programs rp
             JOIN recorded_videos rv ON rp.id = rv.recorded_program_id
-            WHERE 1=1 {encoded_filter}
+            WHERE 1=1
+            {encoded_filter}
         """
         total_params = encoded_params
 
@@ -680,6 +903,7 @@ async def VideosSearchAPI(
             rv.is_tsreplace_encoded,
             rv.tsreplace_encoded_at,
             rv.original_video_codec,
+            rv.encoded_file_path,
             rv.created_at AS rv_created_at,
             rv.updated_at AS rv_updated_at,
             ch.id AS ch_id,
@@ -696,7 +920,23 @@ async def VideosSearchAPI(
             ch.is_radiochannel,
             ch.is_watchable
         FROM recorded_programs rp
-        JOIN recorded_videos rv ON rp.id = rv.recorded_program_id
+        JOIN (
+            SELECT rv.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY rv.recorded_program_id
+                       ORDER BY
+                           -- エンコード済みファイルを優先
+                           -- 元ファイル（encoded_file_path IS NOT NULL）は後回しにする
+                           CASE
+                               WHEN rv.encoded_file_path IS NOT NULL THEN 1  -- 元ファイルは後回し
+                               WHEN (rv.file_path LIKE '%_h264%' OR rv.file_path LIKE '%_h265%' OR rv.file_path LIKE '%_av1%') OR
+                                    rv.is_original_file_deleted = 1 THEN 0  -- エンコード済みファイルを優先
+                               ELSE 1
+                           END,
+                           rv.id DESC
+                   ) AS rn
+            FROM recorded_videos rv
+        ) rv ON rp.id = rv.recorded_program_id AND rv.rn = 1
         LEFT JOIN channels ch ON rp.channel_id = ch.id
         WHERE {where_clause}
         ORDER BY rp.start_time {order}, rp.id {order}
@@ -711,8 +951,8 @@ async def VideosSearchAPI(
     combined_params.extend([str(PAGE_SIZE), str((page - 1) * PAGE_SIZE)])
 
     # 総数を取得するクエリを構築
-    total_query = f"""
-        SELECT COUNT(*) as count
+    total_query = """
+        SELECT COUNT(DISTINCT rp.id) as count
         FROM recorded_programs rp
         JOIN recorded_videos rv ON rp.id = rv.recorded_program_id
         LEFT JOIN channels ch ON rp.channel_id = ch.id
@@ -759,76 +999,6 @@ async def VideoAPI(
     """
 
     return recorded_program
-
-
-@router.get(
-    '/{video_id}/download',
-    summary = '録画番組ダウンロード API',
-    response_description = '録画番組の MPEG-TS ファイル。',
-    response_class = FileResponse,
-    responses = {
-        200: {'content': {'video/mp2t': {}}},
-        422: {'description': 'Specified video_id was not found'},
-        404: {'description': 'File not found'},
-    },
-)
-async def VideoDownloadAPI(
-    recorded_program: Annotated[RecordedProgram, Depends(GetRecordedProgram)],
-    file_type: Annotated[Literal['original', 'encoded'], Query(description='ダウンロードするファイルの種類 (original: 元ファイル, encoded: エンコード済みファイル)')] = 'original',
-):
-    """
-    指定された録画番組の MPEG-TS ファイルをダウンロードする。
-    """
-
-    # エンコード済みの場合の処理
-    if recorded_program.recorded_video.is_tsreplace_encoded:
-        if file_type == 'original':
-            # 元ファイルが削除されているか確認
-            if recorded_program.recorded_video.is_original_file_deleted:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail='Original file has been deleted',
-                )
-            # 元ファイルをダウンロード（file_pathは元ファイルのパス）
-            else:
-                file_path = recorded_program.recorded_video.file_path
-                filename = pathlib.Path(file_path).name
-        else:
-            # エンコード済みファイルをダウンロード
-            if not recorded_program.recorded_video.encoded_file_path:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail='Encoded file path not available',
-                )
-            file_path = recorded_program.recorded_video.encoded_file_path
-            filename = pathlib.Path(file_path).name
-    else:
-        # エンコードされていない場合
-        if file_type == 'encoded':
-            # エンコードされていないのにエンコード済みファイルが要求された場合
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail='Encoded file not found',
-            )
-        else:
-            # 元ファイルをダウンロード
-            file_path = recorded_program.recorded_video.file_path
-            filename = pathlib.Path(file_path).name
-
-    # ファイルが実際に存在するか確認
-    if not pathlib.Path(file_path).exists():
-        logging.error(f'[VideoDownloadAPI] File not found: {file_path}')
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail='File not found',
-        )
-
-    # ファイルをダウンロードさせる
-    return FileResponse(
-        path = file_path,
-        filename = filename,
-        media_type = 'video/mp2t',
-    )
 
 
 @router.get(

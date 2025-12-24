@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import os
 import pathlib
 from dataclasses import dataclass
 from datetime import datetime
@@ -61,6 +62,7 @@ class RecordedVideoSummary:
     file_size: int
     file_hash: str
     is_tsreplace_encoded: bool
+    encoded_file_path: str | None
 
 
 class RecordedScanTask:
@@ -272,11 +274,12 @@ class RecordedScanTask:
         logging.info('Batch scan of recording folders has been started.')
         self._is_batch_scan_running = True
 
-        # 現在登録されている全ての RecordedVideo レコードの情報をキャッシュ
-        ## すべての情報をキャッシュすると key_frames フィールドのデータ量が大きすぎてメモリとディスク I/O を大量に食うため、
-        ## 必要最低限の情報のみをキャッシュする
-        logging.info('Gathering all recorded video records...')
-        all_video_rows = await RecordedVideo.all().values(
+        try:
+            # 現在登録されている全ての RecordedVideo レコードの情報をキャッシュ
+            ## すべての情報をキャッシュすると key_frames フィールドのデータ量が大きすぎてメモリとディスク I/O を大量に食うため、
+            ## 必要最低限の情報のみをキャッシュする
+            logging.info('Gathering all recorded video records...')
+            all_video_rows = await RecordedVideo.all().values(
             'id',
             'file_path',
             'created_at',
@@ -287,11 +290,12 @@ class RecordedScanTask:
             'file_size',
             'file_hash',
             'is_tsreplace_encoded',
+            'encoded_file_path',
         )
-        videos_by_path: dict[str, list[RecordedVideoSummary]] = {}
-        videos_to_keep: list[RecordedVideoSummary] = []  # 保持するレコードのリスト
-        for index, row in enumerate(all_video_rows, start=1):
-            recorded_video_summary = RecordedVideoSummary(
+            videos_by_path: dict[str, list[RecordedVideoSummary]] = {}
+            videos_to_keep: list[RecordedVideoSummary] = []  # 保持するレコードのリスト
+            for index, row in enumerate(all_video_rows, start=1):
+                recorded_video_summary = RecordedVideoSummary(
                 id = row['id'],
                 file_path = row['file_path'],
                 created_at = row['created_at'],
@@ -302,135 +306,207 @@ class RecordedScanTask:
                 file_size = row['file_size'],
                 file_hash = row['file_hash'],
                 is_tsreplace_encoded = row['is_tsreplace_encoded'],
-            )
-            if recorded_video_summary.file_path not in videos_by_path:
-                videos_by_path[recorded_video_summary.file_path] = []
-            videos_by_path[recorded_video_summary.file_path].append(recorded_video_summary)
-            if index % 100 == 0:
-                # 起動時にイベントループが他のタスクを処理できるよう定期的に制御を返す
-                await asyncio.sleep(0)
-
-        # 同一ファイルパスに対応するレコードが複数存在する場合、最新のものを保持して残りを削除する
-        ## 重複削除処理をトランザクション配下で実行
-        logging.info('Checking for duplicate recorded video records...')
-        duplicates_found = False
-        total_deleted_count = 0
-        async with transactions.in_transaction():
-            for index, (file_path, videos) in enumerate(videos_by_path.items(), start=1):
-                if len(videos) > 1:
-                    duplicates_found = True
-                    logging.warning(f'{file_path}: Found {len(videos)} duplicate records. Keeping the latest one.')
-                    # created_at でソートして最新のレコードを特定
-                    videos.sort(key=lambda v: v.created_at, reverse=True)
-                    latest_video = videos[0]
-                    videos_to_keep.append(latest_video)  # 最新のものを保持リストに追加
-                    # 最新以外のレコードを削除
-                    for video_to_delete in videos[1:]:
-                        try:
-                            # RecordedProgram を削除 (CASCADE により RecordedVideo も削除される)
-                            await RecordedProgram.filter(id=video_to_delete.recorded_program_id).delete()
-                            logging.info(
-                                f'{file_path}: Deleted duplicate record. [deleted recorded_program_id: {video_to_delete.recorded_program_id}] '
-                                f'[kept recorded_program_id: {latest_video.recorded_program_id}]'
-                            )
-                        except Exception as ex_del:
-                            logging.error(
-                                f'{file_path}: Failed to delete duplicate record. [deleted recorded_program_id: {video_to_delete.recorded_program_id}]',
-                                exc_info=ex_del,
-                            )
-                    # 削除対象のレコード数をカウント
-                    deleted_count = len(videos) - 1  # -1 は最新のレコードを除いた数
-                    total_deleted_count += deleted_count
-                else:
-                    # 重複がない場合も保持リストに追加
-                    videos_to_keep.append(videos[0])
-                if index % 50 == 0:
-                    # 重複チェックがループを占有し続けないよう適宜制御を返す
-                    await asyncio.sleep(0)
-        if duplicates_found:
-            logging.info(f'Duplicate record cleanup finished. Total {total_deleted_count} duplicate records were deleted.')
-        else:
-            logging.info('No duplicate records found.')
-
-        # 現在登録されている全ての RecordedVideo レコードをキャッシュ
-        ## 重複削除処理で保持すると判断されたレコードのみを使う
-        existing_db_recorded_videos = {
-            anyio.Path(video.file_path): video for video in videos_to_keep
-        }
-
-        # 各録画フォルダをスキャン
-        logging.info('Scanning recorded folders...')
-        for folder in self.recorded_folders:
-            async for file_path in folder.rglob('*'):
-                try:
-                    # シンボリックリンクはスキップ
-                    if await file_path.is_symlink():
-                        continue
-                    # Mac の metadata ファイルをスキップ
-                    if file_path.name.startswith('._'):
-                        continue
-                    # 対象拡張子のファイル以外をスキップ
-                    if file_path.suffix.lower() not in self.SCAN_TARGET_EXTENSIONS:
-                        continue
-                    # 録画ファイルが確実に存在することを確認する
-                    ## 環境次第では、稀に glob で取得したファイルが既に存在しなくなっているケースがある
-                    if not await self.isFileExists(file_path):
-                        continue
-
-                    # 見つかったファイルを処理
-                    await self.processRecordedFile(file_path, existing_db_recorded_videos)
-                except Exception as ex:
-                    logging.error(f'{file_path}: Failed to process recorded file:', exc_info=ex)
-
-        # 存在しない録画ファイルに対応するレコードを一括削除
-        ## トランザクション配下に入れることでパフォーマンスが向上する
-        logging.info('Deleting records for non-existent files...')
-        async with transactions.in_transaction():
-            for index, (file_path, existing_recorded_video_summary) in enumerate(existing_db_recorded_videos.items(), start=1):
-                # ファイルの存在確認を非同期に行う
-                if not await self.isFileExists(file_path):
-                    # RecordedVideo の親テーブルである RecordedProgram を削除すると、
-                    # CASCADE 制約により RecordedVideo も同時に削除される (Channel は親テーブルにあたるため削除されない)
-                    await RecordedProgram.filter(id=existing_recorded_video_summary.recorded_program_id).delete()
-                    logging.info(f'{file_path}: Deleted record for non-existent file.')
-                if index % 50 == 0:
-                    # 既存レコードの走査が長時間化しないよう適宜制御を返す
+                encoded_file_path = row.get('encoded_file_path'),
+                )
+                if recorded_video_summary.file_path not in videos_by_path:
+                    videos_by_path[recorded_video_summary.file_path] = []
+                videos_by_path[recorded_video_summary.file_path].append(recorded_video_summary)
+                if index % 100 == 0:
+                    # 起動時にイベントループが他のタスクを処理できるよう定期的に制御を返す
                     await asyncio.sleep(0)
 
-        # DB に存在する全ての RecordedVideo レコードのハッシュを取得
-        logging.info('Gathering all recorded video hashes...')
-        db_recorded_video_hashes = set(
-            cast(list[str], await RecordedVideo.all().values_list('file_hash', flat=True))
-        )
-
-        # サムネイルフォルダ内の全ファイルをスキャンし、不要なサムネイルファイルを削除
-        logging.info('Deleting orphaned thumbnail files...')
-        thumbnails_dir = anyio.Path(str(THUMBNAILS_DIR))
-        if await thumbnails_dir.is_dir():
-            async for thumbnail_path in thumbnails_dir.glob('*'):
-                try:
-                    # .git から始まるファイルは無視
-                    if thumbnail_path.name.startswith('.git'):
-                        continue
-
-                    # ファイル名からハッシュを抽出
-                    ## ファイル名は "{hash}.webp" または "{hash}_tile.webp" の形式
-                    ## JPEG フォールバックの場合は ".jpg" の可能性もある
-                    file_name = thumbnail_path.stem
-                    if file_name.endswith('_tile'):
-                        file_hash = file_name[:-5]  # "_tile" を除去
+            # 同一ファイルパスに対応するレコードが複数存在する場合、最新のものを保持して残りを削除する
+            ## 重複削除処理をトランザクション配下で実行
+            logging.info('Checking for duplicate recorded video records...')
+            duplicates_found = False
+            total_deleted_count = 0
+            async with transactions.in_transaction():
+                for index, (file_path, videos) in enumerate(videos_by_path.items(), start=1):
+                    if len(videos) > 1:
+                        duplicates_found = True
+                        logging.warning(f'{file_path}: Found {len(videos)} duplicate records. Keeping the latest one.')
+                        # created_at でソートして最新のレコードを特定
+                        videos.sort(key=lambda v: v.created_at, reverse=True)
+                        latest_video = videos[0]
+                        videos_to_keep.append(latest_video)  # 最新のものを保持リストに追加
+                        # 最新以外のレコードを削除
+                        for video_to_delete in videos[1:]:
+                            try:
+                                # RecordedProgram を削除 (CASCADE により RecordedVideo も削除される)
+                                await RecordedProgram.filter(id=video_to_delete.recorded_program_id).delete()
+                                logging.info(
+                                    f'{file_path}: Deleted duplicate record. [deleted recorded_program_id: {video_to_delete.recorded_program_id}] '
+                                    f'[kept recorded_program_id: {latest_video.recorded_program_id}]'
+                                )
+                            except Exception as ex_del:
+                                logging.error(
+                                    f'{file_path}: Failed to delete duplicate record. [deleted recorded_program_id: {video_to_delete.recorded_program_id}]',
+                                    exc_info=ex_del,
+                                )
+                        # 削除対象のレコード数をカウント
+                        deleted_count = len(videos) - 1  # -1 は最新のレコードを除いた数
+                        total_deleted_count += deleted_count
                     else:
-                        file_hash = file_name
+                        # 重複がない場合も保持リストに追加
+                        videos_to_keep.append(videos[0])
+                    if index % 50 == 0:
+                        # 重複チェックがループを占有し続けないよう適宜制御を返す
+                        await asyncio.sleep(0)
+            if duplicates_found:
+                logging.info(f'Duplicate record cleanup finished. Total {total_deleted_count} duplicate records were deleted.')
+            else:
+                logging.info('No duplicate records found.')
 
-                    # DB に存在しないハッシュのファイルを削除
-                    if file_hash not in db_recorded_video_hashes:
-                        await thumbnail_path.unlink()
-                        logging.info(f'{thumbnail_path.name}: Deleted orphaned thumbnail file.')
-                except Exception as ex:
-                    logging.error(f'{thumbnail_path}: Error deleting orphaned thumbnail file:', exc_info=ex)
+            # 現在登録されている全ての RecordedVideo レコードをキャッシュ
+            ## 重複削除処理で保持すると判断されたレコードのみを使う
+            existing_db_recorded_videos = {
+                anyio.Path(video.file_path): video for video in videos_to_keep
+            }
 
-        logging.info('Batch scan of recording folders has been completed.')
-        self._is_batch_scan_running = False
+            # 各録画フォルダをスキャン
+            logging.info('Scanning recorded folders...')
+            for folder in self.recorded_folders:
+                async for file_path in folder.rglob('*'):
+                    try:
+                        # シンボリックリンクはスキップ
+                        if await file_path.is_symlink():
+                            continue
+                        # Mac の metadata ファイルをスキップ
+                        if file_path.name.startswith('._'):
+                            continue
+                        # 対象拡張子のファイル以外をスキップ
+                        if file_path.suffix.lower() not in self.SCAN_TARGET_EXTENSIONS:
+                            continue
+                        # 録画ファイルが確実に存在することを確認する
+                        ## 環境次第では、稀に glob で取得したファイルが既に存在しなくなっているケースがある
+                        if not await self.isFileExists(file_path):
+                            continue
+
+                        # 見つかったファイルを処理
+                        await self.processRecordedFile(file_path, existing_db_recorded_videos)
+                    except Exception as ex:
+                        logging.error(f'{file_path}: Failed to process recorded file:', exc_info=ex)
+
+            # 存在しない録画ファイルに対応するレコードを一括削除
+            ## ファイルが存在するものだけをDBに残す
+            ## 元の仕様に戻す：エンコード済みファイル（_h264, _h265, _av1を含むファイル名）のレコードは削除する
+            ## トランザクション配下に入れることでパフォーマンスが向上する
+            logging.info('Deleting records for non-existent files and encoded file records...')
+            async with transactions.in_transaction():
+                # すべてのRecordedVideoレコードを取得
+                all_recorded_videos = await RecordedVideo.all().values(
+                    'id',
+                    'file_path',
+                    'encoded_file_path',
+                    'recorded_program_id',
+                )
+                
+                for index, video_row in enumerate(all_recorded_videos, start=1):
+                    file_path = anyio.Path(video_row['file_path'])
+                    filename = file_path.name
+                    
+                    # エンコード済みファイル（_h264, _h265, _av1を含むファイル名）のレコードの処理
+                    if '_h264' in filename or '_h265' in filename or '_av1' in filename:
+                        # エンコード済みファイルが存在する場合、元ファイルのレコードがあるかチェック
+                        if await self.isFileExists(file_path):
+                            # 元ファイルのレコードを探す
+                            original_file_path = RecordedScanTask._get_original_file_path_from_encoded(str(file_path))
+                            if original_file_path:
+                                original_recorded_video = await RecordedVideo.get_or_none(file_path=original_file_path)
+                                if original_recorded_video:
+                                    # 元ファイルのレコードが存在する場合、エンコード済みファイルのレコードは削除
+                                    # （元ファイルのレコードのencoded_file_pathに統合される）
+                                    await RecordedVideo.filter(id=video_row['id']).delete()
+                                    logging.info(f"RecordedVideo ID {video_row['id']}: Deleted encoded file record (original file record exists): {video_row['file_path']}")
+                                else:
+                                    # 元ファイルのレコードが存在しない場合（元ファイルが削除された場合）
+                                    # エンコード済みファイルのレコードは残す（is_original_file_deletedフラグを設定）
+                                    db_recorded_video = await RecordedVideo.get(id=video_row['id'])
+                                    if not db_recorded_video.is_original_file_deleted:
+                                        db_recorded_video.is_original_file_deleted = True
+                                        await db_recorded_video.save()
+                                        logging.info(f"RecordedVideo ID {video_row['id']}: Marked as original file deleted: {video_row['file_path']}")
+                            else:
+                                # 元ファイルパスが取得できない場合、エンコード済みファイルのレコードは残す
+                                logging.debug(f"RecordedVideo ID {video_row['id']}: Keeping encoded file record (cannot determine original file path): {video_row['file_path']}")
+                        else:
+                            # エンコード済みファイルが存在しない場合、レコードを削除
+                            await RecordedVideo.filter(id=video_row['id']).delete()
+                            logging.info(f"RecordedVideo ID {video_row['id']}: Deleted encoded file record (file does not exist): {video_row['file_path']}")
+                    # file_pathが存在しない場合
+                    elif not await self.isFileExists(file_path):
+                        # encoded_file_pathが存在する場合は、file_pathをencoded_file_pathに更新（元ファイルが削除された場合の処理）
+                        if video_row['encoded_file_path']:
+                            encoded_file_path = anyio.Path(video_row['encoded_file_path'])
+                            if await self.isFileExists(encoded_file_path):
+                                # file_pathをencoded_file_pathに更新
+                                db_recorded_video = await RecordedVideo.get(id=video_row['id'])
+                                db_recorded_video.file_path = str(encoded_file_path)
+                                db_recorded_video.encoded_file_path = None
+                                db_recorded_video.is_original_file_deleted = True
+                                await db_recorded_video.save()
+                                logging.info(f"RecordedVideo ID {video_row['id']}: Updated file_path to encoded_file_path (original file deleted): {video_row['file_path']} -> {video_row['encoded_file_path']}")
+                            else:
+                                # encoded_file_pathも存在しない場合はレコードを削除
+                                await RecordedVideo.filter(id=video_row['id']).delete()
+                                logging.info(f"RecordedVideo ID {video_row['id']}: Deleted record because both original and encoded files do not exist: {video_row['file_path']}, {video_row['encoded_file_path']}")
+                        else:
+                            # encoded_file_pathが設定されていない場合はレコードを削除
+                            await RecordedVideo.filter(id=video_row['id']).delete()
+                            logging.info(f"RecordedVideo ID {video_row['id']}: Deleted record because file does not exist: {video_row['file_path']}")
+                    # encoded_file_pathが設定されているが、そのファイルが存在しない場合
+                    elif video_row['encoded_file_path']:
+                        encoded_file_path = anyio.Path(video_row['encoded_file_path'])
+                        if not await self.isFileExists(encoded_file_path):
+                            # encoded_file_pathをNULLにリセット（レコード自体は残す）
+                            db_recorded_video = await RecordedVideo.get(id=video_row['id'])
+                            db_recorded_video.encoded_file_path = None
+                            db_recorded_video.is_tsreplace_encoded = False
+                            db_recorded_video.original_video_codec = None
+                            db_recorded_video.tsreplace_encoded_at = None
+                            await db_recorded_video.save()
+                            logging.info(f"RecordedVideo ID {video_row['id']}: Reset encoded_file_path because file does not exist: {video_row['encoded_file_path']}")
+                    
+                    if index % 50 == 0:
+                        # 既存レコードの走査が長時間化しないよう適宜制御を返す
+                        await asyncio.sleep(0)
+
+            # DB に存在する全ての RecordedVideo レコードのハッシュを取得
+            logging.info('Gathering all recorded video hashes...')
+            db_recorded_video_hashes = set(
+                cast(list[str], await RecordedVideo.all().values_list('file_hash', flat=True))
+            )
+
+            # サムネイルフォルダ内の全ファイルをスキャンし、不要なサムネイルファイルを削除
+            logging.info('Deleting orphaned thumbnail files...')
+            thumbnails_dir = anyio.Path(str(THUMBNAILS_DIR))
+            if await thumbnails_dir.is_dir():
+                async for thumbnail_path in thumbnails_dir.glob('*'):
+                    try:
+                        # .git から始まるファイルは無視
+                        if thumbnail_path.name.startswith('.git'):
+                            continue
+
+                        # ファイル名からハッシュを抽出
+                        ## ファイル名は "{hash}.webp" または "{hash}_tile.webp" の形式
+                        ## JPEG フォールバックの場合は ".jpg" の可能性もある
+                        file_name = thumbnail_path.stem
+                        if file_name.endswith('_tile'):
+                            file_hash = file_name[:-5]  # "_tile" を除去
+                        else:
+                            file_hash = file_name
+
+                        # DB に存在しないハッシュのファイルを削除
+                        if file_hash not in db_recorded_video_hashes:
+                            await thumbnail_path.unlink()
+                            logging.info(f'{thumbnail_path.name}: Deleted orphaned thumbnail file.')
+                    except Exception as ex:
+                        logging.error(f'{thumbnail_path}: Error deleting orphaned thumbnail file:', exc_info=ex)
+
+            logging.info('Batch scan of recording folders has been completed.')
+        finally:
+            # エラーが発生しても確実にフラグをリセット
+            self._is_batch_scan_running = False
 
 
     async def processRecordedFile(
@@ -531,6 +607,7 @@ class RecordedScanTask:
                         'file_size',
                         'file_hash',
                         'is_tsreplace_encoded',
+                        'encoded_file_path',
                     )
                     if len(summary_rows) > 0:
                         row = summary_rows[0]
@@ -545,6 +622,7 @@ class RecordedScanTask:
                             file_size = row['file_size'],
                             file_hash = row['file_hash'],
                             is_tsreplace_encoded = row['is_tsreplace_encoded'],
+                            encoded_file_path = row.get('encoded_file_path'),
                         )
 
                 # 同じファイルパスの既存レコードがあり、ファイルの基本情報（作成日時、更新日時、サイズ）が前回と一致した場合、
@@ -589,23 +667,10 @@ class RecordedScanTask:
                         # 録画開始前にファイルアロケーションを行う録画予約ソフトでは、録画中も表面上ファイルサイズが変化しない問題への対処
                         pass
 
-                # エンコード済みファイルかどうかをチェック
-                if self._is_encoded_file(file_path):
-                    logging.info(f'{file_path}: Detected encoded file, attempting to inherit metadata from original file.')
-
-                    # 既にTSReplaceEncodingTaskで処理済みかチェック
-                    if existing_recorded_video_summary and existing_recorded_video_summary.is_tsreplace_encoded:
-                        logging.info(f'{file_path}: File already processed by TSReplaceEncodingTask with metadata inheritance (ID: {existing_recorded_video_summary.id}, is_encoded: {existing_recorded_video_summary.is_tsreplace_encoded}).')
-                        return
-
-                    logging.info(f'{file_path}: Existing record found: ID={existing_recorded_video_summary.id if existing_recorded_video_summary else "None"}, is_encoded={existing_recorded_video_summary.is_tsreplace_encoded if existing_recorded_video_summary else "None"}')
-
-                    inherited = await self._inherit_metadata_if_encoded_file(file_path)
-                    if inherited:
-                        logging.info(f'{file_path}: Successfully inherited metadata from original file.')
-                        return
-                    else:
-                        logging.warning(f'{file_path}: Failed to inherit metadata from original file, proceeding with normal analysis.')
+                # エンコード済みファイルかどうかをチェック（ファイル名ベースで判定）
+                # ファイル名に_h264、_h265、_av1が含まれている場合のみエンコード済みファイルとして扱う
+                filename = file_path.name
+                is_encoded_file = '_h264' in filename or '_h265' in filename or '_av1' in filename
 
                 # ProcessPoolExecutor を使い、別プロセス上でメタデータを解析
                 ## メタデータ解析処理は実装上同期 I/O で実装されており、また CPU-bound な処理のため、別プロセスで実行している
@@ -744,10 +809,19 @@ class RecordedScanTask:
                     await db_channel.save()
 
             # RecordedProgram の保存または更新
+            ## 同じ event_id, service_id, start_time の RecordedProgram が既に存在する場合は再利用する
+            ## これにより、同じ番組に対して複数の RecordedVideo レコードが作成されることを防ぐ
             if existing_db_recorded_video is not None:
                 db_recorded_program = existing_db_recorded_video.recorded_program
             else:
-                db_recorded_program = RecordedProgram()
+                # get_or_none は複数のレコードがある場合に例外を投げるため、filter().first() を使用
+                db_recorded_program = await RecordedProgram.filter(
+                    event_id=recorded_program.event_id,
+                    service_id=recorded_program.service_id,
+                    start_time=recorded_program.start_time,
+                ).first()
+                if db_recorded_program is None:
+                    db_recorded_program = RecordedProgram()
 
             # RecordedProgram の属性を設定 (id, created_at, updated_at は自動生成のため指定しない)
             db_recorded_program.recording_start_margin = recorded_program.recording_start_margin
@@ -780,7 +854,37 @@ class RecordedScanTask:
             if existing_db_recorded_video is not None:
                 db_recorded_video = existing_db_recorded_video
                 # TSReplaceエンコード情報を保持するかどうかの判定
+                # エンコード済みファイルのレコードが存在するかどうかで判断する
                 preserve_tsreplace_info = db_recorded_video.is_tsreplace_encoded
+                
+                if preserve_tsreplace_info and db_recorded_video.encoded_file_path:
+                    # エンコード済みファイルのレコードが存在するか確認
+                    encoded_file_exists = await RecordedVideo.get_or_none(file_path=db_recorded_video.encoded_file_path)
+                    if not encoded_file_exists:
+                        # エンコード済みファイルのレコードが存在しない場合はフラグをリセット
+                        logging.warning(f'RecordedVideo ID {db_recorded_video.id}: Encoded file record not found, resetting is_tsreplace_encoded flag. Path: {db_recorded_video.encoded_file_path}')
+                        preserve_tsreplace_info = False
+                        db_recorded_video.is_tsreplace_encoded = False
+                        db_recorded_video.encoded_file_path = None
+                        db_recorded_video.original_video_codec = None
+                        db_recorded_video.tsreplace_encoded_at = None
+                    elif not os.path.exists(db_recorded_video.encoded_file_path):
+                        # エンコード済みファイルが存在しない場合はフラグをリセット
+                        logging.warning(f'RecordedVideo ID {db_recorded_video.id}: Encoded file not found, resetting is_tsreplace_encoded flag. Path: {db_recorded_video.encoded_file_path}')
+                        preserve_tsreplace_info = False
+                        db_recorded_video.is_tsreplace_encoded = False
+                        db_recorded_video.encoded_file_path = None
+                        db_recorded_video.original_video_codec = None
+                        db_recorded_video.tsreplace_encoded_at = None
+                elif preserve_tsreplace_info:
+                    # encoded_file_pathがNoneの場合はフラグをリセット
+                    logging.warning(f'RecordedVideo ID {db_recorded_video.id}: encoded_file_path is None, resetting is_tsreplace_encoded flag.')
+                    preserve_tsreplace_info = False
+                    db_recorded_video.is_tsreplace_encoded = False
+                    db_recorded_video.encoded_file_path = None
+                    db_recorded_video.original_video_codec = None
+                    db_recorded_video.tsreplace_encoded_at = None
+                
                 logging.info(f'Updating existing RecordedVideo ID {db_recorded_video.id}, preserve_tsreplace_info={preserve_tsreplace_info}')
             else:
                 db_recorded_video = RecordedVideo()
@@ -800,9 +904,57 @@ class RecordedScanTask:
             db_recorded_video.duration = recorded_program.recorded_video.duration
             db_recorded_video.container_format = recorded_program.recorded_video.container_format
 
-            # TSReplaceエンコード情報を保持する場合は、コーデック情報を上書きしない
+            # エンコード済みファイルかどうかをチェック（ファイル名ベースで判定）
+            filename = pathlib.Path(recorded_program.recorded_video.file_path).name
+            is_encoded_by_filename = '_h264' in filename or '_h265' in filename or '_av1' in filename
+            
             if not preserve_tsreplace_info:
-                db_recorded_video.video_codec = recorded_program.recorded_video.video_codec
+                if is_encoded_by_filename:
+                    # エンコード済みファイルの場合
+                    # 元ファイルのレコードを探す
+                    original_file_path = RecordedScanTask._get_original_file_path_from_encoded(str(recorded_program.recorded_video.file_path))
+                    if original_file_path:
+                        # 元ファイルのレコードを取得
+                        original_recorded_video = await RecordedVideo.get_or_none(file_path=original_file_path)
+                        if original_recorded_video:
+                            # 元ファイルのレコードのencoded_file_pathを更新
+                            original_recorded_video.encoded_file_path = str(recorded_program.recorded_video.file_path)
+                            original_recorded_video.is_tsreplace_encoded = True
+                            if original_recorded_video.original_video_codec is None:
+                                original_recorded_video.original_video_codec = original_recorded_video.video_codec
+                            if '_h264' in filename:
+                                original_recorded_video.video_codec = 'H.264'
+                            elif '_h265' in filename:
+                                original_recorded_video.video_codec = 'H.265'
+                            elif '_av1' in filename:
+                                original_recorded_video.video_codec = 'AV1'
+                            original_recorded_video.tsreplace_encoded_at = datetime.now()
+                            await original_recorded_video.save()
+                            logging.info(f'Updated original file record (ID: {original_recorded_video.id}) with encoded_file_path: {recorded_program.recorded_video.file_path}')
+                            # エンコード済みファイルのレコードは作成しない（元ファイルのレコードに統合）
+                            return
+                    
+                    # 元ファイルのレコードが見つからない場合（元ファイルが削除された場合）
+                    # エンコード済みファイルを通常のファイルとして扱う
+                    db_recorded_video.is_tsreplace_encoded = False
+                    db_recorded_video.encoded_file_path = None
+                    db_recorded_video.original_video_codec = None
+                    db_recorded_video.tsreplace_encoded_at = None
+                    db_recorded_video.is_original_file_deleted = True
+                    if '_h264' in filename:
+                        db_recorded_video.video_codec = 'H.264'
+                    elif '_h265' in filename:
+                        db_recorded_video.video_codec = 'H.265'
+                    elif '_av1' in filename:
+                        db_recorded_video.video_codec = 'AV1'
+                    logging.info(f'Created new record for encoded file (original file deleted): {recorded_program.recorded_video.file_path}')
+                else:
+                    # 通常のファイル（元ファイル）の場合
+                    db_recorded_video.is_tsreplace_encoded = False
+                    db_recorded_video.encoded_file_path = None
+                    db_recorded_video.original_video_codec = None
+                    db_recorded_video.tsreplace_encoded_at = None
+                    db_recorded_video.video_codec = recorded_program.recorded_video.video_codec
             else:
                 logging.info(f'Preserving TSReplace codec info: {db_recorded_video.video_codec} (original: {db_recorded_video.original_video_codec})')
 
@@ -950,14 +1102,14 @@ class RecordedScanTask:
             # タスクを管理辞書に追加
             register_auto_encoding_task(tsreplace_task)
 
-            # バックグラウンドでエンコード実行とクリーンアップ
+            # バックグラウンドでエンコード実行
             async def execute_and_cleanup():
                 try:
                     await tsreplace_task.execute()
                 finally:
-                    # 完了後も一定時間タスクリストに残し、最終状態をクライアントが取得できるようにする
-                    await asyncio.sleep(60 * 5)  # 5分間保持
-                    cleanup_auto_encoding_task(tsreplace_task.encoding_task.task_id)
+                    # 完了後もタスクリストに残し、エラー履歴含めて最終状態をクライアントが取得できるようにする
+                    # タスクは削除せずに保持する（エラー履歴含めて残す）
+                    logging.info(f'Auto encoding task {tsreplace_task.encoding_task.task_id} completed, keeping in task list for history')
 
             asyncio.create_task(execute_and_cleanup())
 
@@ -1196,8 +1348,8 @@ class RecordedScanTask:
                 now = datetime.now(tz=ZoneInfo('Asia/Tokyo'))
                 completed_files: list[anyio.Path] = []
 
-                # 録画中ファイルをチェック
-                for file_path, recording_info in self._recording_files.items():
+                # 録画中ファイルをチェック（辞書のコピーを作成してからイテレート）
+                for file_path, recording_info in list(self._recording_files.items()):
                     try:
                         # ファイルの現在の状態を取得
                         stat = await file_path.stat()
@@ -1345,6 +1497,34 @@ class RecordedScanTask:
             return False
 
     @staticmethod
+    def _get_original_file_path_from_encoded(encoded_file_path: str) -> str | None:
+        """
+        エンコード済みファイルパスから元ファイルパスを取得する
+        
+        Args:
+            encoded_file_path (str): エンコード済みファイルのパス
+            
+        Returns:
+            str | None: 元ファイルのパス（見つからない場合はNone）
+        """
+        import re
+        path_obj = pathlib.Path(encoded_file_path)
+        base_name = path_obj.stem
+        
+        # エンコード済みファイル名からエンコード用サフィックスを除去
+        # 例: "202509041945010102-2びじゅチューン！...._h264_1" -> "202509041945010102-2びじゅチューン！...."
+        codec_pattern = r'_(h264|h265|av1)(?:_\d+)?$'
+        match = re.search(codec_pattern, base_name)
+        if match:
+            base_name_without_codec = base_name[:match.start()]
+        else:
+            return None
+        
+        # 元ファイルのパスを構築
+        original_path = path_obj.parent / f'{base_name_without_codec}{path_obj.suffix}'
+        return str(original_path)
+    
+    @staticmethod
     async def _find_original_file_for_encoded(encoded_file_path: anyio.Path) -> RecordedVideo | None:
         """
         エンコード済みファイルに対応する元ファイルのレコードを検索する
@@ -1474,11 +1654,28 @@ class RecordedScanTask:
 
             # TSReplace情報を継承
             if original_video.is_tsreplace_encoded:
-                encoded_video.is_tsreplace_encoded = True
-                encoded_video.tsreplace_encoded_at = original_video.tsreplace_encoded_at
-                encoded_video.original_video_codec = original_video.original_video_codec
-                logging.info('Inherited TSReplace encoding information')
-                updated = True
+                # 元ファイルのレコードに設定されているencoded_file_pathが存在しない場合、フラグをリセット
+                if original_video.encoded_file_path and not os.path.exists(original_video.encoded_file_path):
+                    logging.warning(f'Original file record has encoded_file_path but file does not exist: {original_video.encoded_file_path}')
+                    logging.warning(f'Resetting is_tsreplace_encoded flag for original file record ID {original_video.id}')
+                    original_video.is_tsreplace_encoded = False
+                    original_video.encoded_file_path = None
+                    original_video.original_video_codec = None
+                    original_video.tsreplace_encoded_at = None
+                    await original_video.save()
+                    # エンコード済みファイルのレコードも同様にリセット
+                    encoded_video.is_tsreplace_encoded = False
+                    encoded_video.tsreplace_encoded_at = None
+                    encoded_video.original_video_codec = None
+                    logging.info('Reset TSReplace encoding flags due to missing encoded file')
+                    updated = True
+                else:
+                    # エンコード済みファイルのレコードにTSReplace情報を継承
+                    encoded_video.is_tsreplace_encoded = True
+                    encoded_video.tsreplace_encoded_at = original_video.tsreplace_encoded_at
+                    encoded_video.original_video_codec = original_video.original_video_codec
+                    logging.info('Inherited TSReplace encoding information')
+                    updated = True
 
             # 変更があった場合のみDBを更新
             if updated:

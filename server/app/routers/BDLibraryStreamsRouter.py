@@ -1,14 +1,12 @@
+import os
+import os
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status, Response
+
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response, status
 from fastapi.responses import FileResponse
-from sse_starlette.sse import EventSourceResponse
-import json
+
 from app.constants import QUALITY, QUALITY_TYPES
 from app.models.BDLibrary import BDLibrary
-import app.logging
-import asyncio
-import os
-import re
 
 router = APIRouter(
     tags=['Streams'],
@@ -72,11 +70,6 @@ async def BDHLSTsFileAPI(
         raise HTTPException(status_code=400, detail='Invalid ts_filename')
 
     ts_path = os.path.join(bd.path, quality, ts_filename)
-    print(f'[DEBUG] BD Path: {bd.path}')
-    print(f'[DEBUG] Quality: {quality}')
-    print(f'[DEBUG] TS Filename: {ts_filename}')
-    print(f'[DEBUG] Full TS Path: {ts_path}')
-    print(f'[DEBUG] Path exists: {os.path.exists(ts_path)}')
 
     if not os.path.exists(ts_path):
         raise HTTPException(status_code=404, detail=f'{ts_filename} not found at {ts_path}')

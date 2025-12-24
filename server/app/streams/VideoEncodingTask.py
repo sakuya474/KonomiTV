@@ -399,9 +399,12 @@ class VideoEncodingTask:
         if self.video_stream.recorded_program.recorded_video.container_format == 'MPEG-TS':
             # エンコード済みファイルがある場合はそちらを優先、なければ元のファイルを使用
             recorded_video = self.video_stream.recorded_program.recorded_video
-            if recorded_video.is_tsreplace_encoded and recorded_video.encoded_file_path:
+            if recorded_video.is_tsreplace_encoded and recorded_video.encoded_file_path and os.path.exists(recorded_video.encoded_file_path):
                 file_path = recorded_video.encoded_file_path
             else:
+                # エンコード済みファイルが存在しない場合は元のファイルを使用
+                if recorded_video.is_tsreplace_encoded and recorded_video.encoded_file_path:
+                    logging.warning(f'{self.video_stream.log_prefix} Encoded file not found, falling back to original file: {recorded_video.encoded_file_path}')
                 file_path = recorded_video.file_path
             file = open(file_path, 'rb')
 
@@ -434,9 +437,12 @@ class VideoEncodingTask:
 
                     # エンコード済みファイルがある場合はそちらを優先、なければ元のファイルを使用
                     recorded_video = self.video_stream.recorded_program.recorded_video
-                    if recorded_video.is_tsreplace_encoded and recorded_video.encoded_file_path:
+                    if recorded_video.is_tsreplace_encoded and recorded_video.encoded_file_path and os.path.exists(recorded_video.encoded_file_path):
                         input_file_path = recorded_video.encoded_file_path
                     else:
+                        # エンコード済みファイルが存在しない場合は元のファイルを使用
+                        if recorded_video.is_tsreplace_encoded and recorded_video.encoded_file_path:
+                            logging.warning(f'{self.video_stream.log_prefix} Encoded file not found, falling back to original file: {recorded_video.encoded_file_path}')
                         input_file_path = recorded_video.file_path
 
                     # psisimux のオプション

@@ -31,11 +31,6 @@
                         class="recorded-program__thumbnail-status-icon--spin" />
                     エンコード中 ({{ Math.round(encodingProgress.progress) }}%)
                 </div>
-                <div v-else-if="program?.recorded_video.is_tsreplace_encoded"
-                    class="recorded-program__thumbnail-status recorded-program__thumbnail-status--encoded">
-                    <Icon icon="fluent:checkmark-circle-12-regular" width="15px" height="15px" />
-                    再エンコード済み
-                </div>
                 <div v-if="watchHistory && !isEncoding" class="recorded-program__thumbnail-progress">
                     <div class="recorded-program__thumbnail-progress-bar"
                         :style="`width: ${(watchHistory.last_playback_position / program.recorded_video.duration) * 100}%`">
@@ -60,14 +55,6 @@
                     </div>
                     <div class="recorded-program__content-meta-broadcaster" v-else>
                         <span class="recorded-program__content-meta-broadcaster-name">チャンネル情報なし</span>
-                    </div>
-                    <!-- 再エンコード済みラベル -->
-                    <div v-if="program.recorded_video.is_tsreplace_encoded"
-                        class="recorded-program__content-meta-encoded">
-                        <v-chip size="x-small" color="success" variant="tonal">
-                            <Icon icon="fluent:checkmark-circle-12-regular" width="12px" height="12px" class="mr-1" />
-                            再エンコード済み
-                        </v-chip>
                     </div>
                     <div class="recorded-program__content-meta-time">{{ ProgramUtils.getProgramTime(program) }}</div>
                 </div>
@@ -122,37 +109,6 @@
                             </template>
                             <v-list-item-title class="ml-3">録画ファイル情報を表示</v-list-item-title>
                         </v-list-item>
-                        <!-- TSReplaceエンコード済みファイルがある場合は選択メニューを表示 -->
-                        <template v-if="program.recorded_video.is_tsreplace_encoded">
-                            <v-list-item @click="downloadVideo('original')"
-                                :disabled="program.recorded_video.status === 'Recording' || isEncoding">
-                                <template v-slot:prepend>
-                                    <Icon icon="fluent:arrow-download-24-regular" width="20px" height="20px" />
-                                </template>
-                                <v-list-item-title class="ml-3">元ファイルをダウンロード ({{
-                                    Utils.formatBytes(program.recorded_video.file_size)
-                                }})</v-list-item-title>
-                            </v-list-item>
-                            <v-list-item @click="downloadVideo('encoded')"
-                                :disabled="program.recorded_video.status === 'Recording' || isEncoding">
-                                <template v-slot:prepend>
-                                    <Icon icon="fluent:arrow-download-24-regular" width="20px" height="20px" />
-                                </template>
-                                <v-list-item-title class="ml-3">エンコード済みファイルをダウンロード</v-list-item-title>
-                            </v-list-item>
-                        </template>
-                        <!-- エンコード済みファイルがない場合は従来通り -->
-                        <template v-else>
-                            <v-list-item @click="downloadVideo('original')"
-                                :disabled="program.recorded_video.status === 'Recording' || isEncoding">
-                                <template v-slot:prepend>
-                                    <Icon icon="fluent:arrow-download-24-regular" width="20px" height="20px" />
-                                </template>
-                                <v-list-item-title class="ml-3">録画ファイルをダウンロード ({{
-                                    Utils.formatBytes(program.recorded_video.file_size)
-                                }})</v-list-item-title>
-                            </v-list-item>
-                        </template>
                         <v-list-item @click="reanalyzeVideo" v-ftooltip="'再生時に必要な録画ファイル情報や番組情報などを解析し直します'">
                             <template v-slot:prepend>
                                 <Icon icon="fluent:book-arrow-clockwise-20-regular" width="20px" height="20px" />
@@ -173,8 +129,8 @@
                         </v-list-item>
                         <v-divider></v-divider>
                         <v-list-item @click="showEncodingDialog"
-                            :disabled="program.recorded_video.status === 'Recording' || isEncoding || program.recorded_video.is_tsreplace_encoded"
-                            v-ftooltip="program.recorded_video.is_tsreplace_encoded ? '再エンコード済みの動画は再度エンコードできません' : '録画ファイルをH.264またはHEVCに再エンコードします'">
+                            :disabled="program.recorded_video.status === 'Recording' || isEncoding"
+                            v-ftooltip="'録画ファイルをH.264またはHEVCに再エンコードします'">
                             <template v-slot:prepend>
                                 <Icon icon="fluent:arrow-sync-20-regular" width="20px" height="20px" />
                             </template>
@@ -287,12 +243,6 @@ const encodingProgress = computed(() => {
         encoderType: task.encoderType,
     } : null;
 });
-
-// 録画ファイルのダウンロード (location.href を変更し、ダウンロード自体はブラウザに任せる)
-const downloadVideo = (fileType: 'original' | 'encoded' = 'original') => {
-    const url = `${Utils.api_base_url}/videos/${props.program.id}/download?file_type=${fileType}`;
-    window.location.href = url;
-};
 
 // エンコードダイアログを表示
 const showEncodingDialog = () => {

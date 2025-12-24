@@ -80,9 +80,16 @@ class CMSectionsDetector:
 
         # エンコード済みファイルの場合は、CM区間検出をスキップする
         # エンコード済みファイルのCM区間情報は元ファイルから継承されるべき
+        # ただし、DBにCM区間情報がない場合は検出を実行する（元ファイルから継承できなかった場合のフォールバック）
         if self._is_encoded_file():
-            logging.info(f'{self.file_path}: Skipping CM detection for encoded file (should inherit from original)')
-            return
+            # DBにCM区間情報があるかチェック
+            db_recorded_video = await RecordedVideo.get_or_none(file_path=str(self.file_path))
+
+            if db_recorded_video is not None and db_recorded_video.cm_sections is not None:
+                logging.info(f'{self.file_path}: Skipping CM detection for encoded file (CM sections already exist, inherited from original)')
+                return
+            else:
+                logging.info(f'{self.file_path}: Encoded file detected but no CM sections found in DB, proceeding with CM detection')
 
         try:
             # 録画ファイルに対応するチャプターファイル (.chapter.txt) がもしあれば解析し、CM 区間情報を取得する
@@ -146,7 +153,7 @@ class CMSectionsDetector:
 
         # チャプターファイルのパスを生成
         # 録画ファイルが hoge.ts なら hoge.chapter.txt を探す
-        chapter_file_path = self.file_path.with_name(f"{self.file_path.stem}.chapter.txt")
+        chapter_file_path = anyio.Path(self.file_path.parent / f"{self.file_path.stem}.chapter.txt")
 
         # チャプターファイルが存在しない場合は None を返す
         if not await chapter_file_path.exists():

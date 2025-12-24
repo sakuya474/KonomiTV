@@ -430,8 +430,10 @@ class _ServerSettingsTSReplaceEncoding(BaseModel):
     task_timeout_minutes: PositiveInt = 180
     # TSReplace用エンコーダーオプション設定
     # ソフトウェアエンコード (FFmpeg)
-    ffmpeg_h264_options: str = '-y -f mpegts -i - -copyts -start_at_zero -vf yadif -an -c:v libx264 -preset medium -crf 23 -g 90 -f mpegts -'
-    ffmpeg_hevc_options: str = '-y -f mpegts -i - -copyts -start_at_zero -vf yadif -an -c:v libx265 -preset medium -crf 23 -g 90 -f mpegts -'
+    # 公式のtsreplaceの例に基づく（https://github.com/rigaya/tsreplace#%E3%82%AA%E3%83%97%E3%82%B7%E3%83%A7%E3%83%B3）
+    # PMT変更対応のための安全なオプションを含めています（PMT変更がないファイルでも正常に動作します）
+    ffmpeg_h264_options: str = '-y -f mpegts -thread_queue_size 1024 -analyzeduration 20000000 -probesize 20000000 -err_detect aggressive -fflags +genpts+igndts+nobuffer+discardcorrupt -i - -copyts -start_at_zero -vf yadif -an -c:v libx264 -preset slow -crf 23 -g 90 -f mpegts -'
+    ffmpeg_hevc_options: str = '-y -f mpegts -thread_queue_size 1024 -analyzeduration 20000000 -probesize 20000000 -err_detect aggressive -fflags +genpts+igndts+nobuffer+discardcorrupt -i - -copyts -start_at_zero -vf yadif -an -c:v libx265 -preset medium -crf 23 -g 90 -f mpegts -'
     # NVIDIA GPU用オプション (NVEncC)
     nvidia_h264_options: str = '-i - --input-format mpegts --tff --vpp-deinterlace normal -c h264 --qvbr 23 --gop-len 90 --output-format mpegts -o -'
     nvidia_hevc_options: str = '-i - --input-format mpegts --tff --vpp-deinterlace normal -c hevc --qvbr 23 --gop-len 90 --output-format mpegts -o -'

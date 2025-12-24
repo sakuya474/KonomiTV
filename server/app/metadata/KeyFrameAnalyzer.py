@@ -87,9 +87,20 @@ class KeyFrameAnalyzer:
 
         # エンコード済みファイルの場合は、キーフレーム解析をスキップする
         # エンコード済みファイルのキーフレーム情報は元ファイルから継承されるべき
+        # ただし、DBにキーフレーム情報がない場合は解析を実行する（元ファイルから継承できなかった場合のフォールバック）
         if self._is_encoded_file():
-            logging.info(f'{self.file_path}: Skipping keyframe analysis for encoded file (should inherit from original)')
-            return
+            # DBにキーフレーム情報があるかチェック
+            try:
+                db_recorded_video = await RecordedVideo.get_or_none(file_path=str(self.file_path))
+            except MultipleObjectsReturned:
+                # 複数のレコードが存在する場合、最新のものを取得
+                db_recorded_video = await RecordedVideo.filter(file_path=str(self.file_path)).order_by('-id').first()
+
+            if db_recorded_video is not None and db_recorded_video.key_frames and len(db_recorded_video.key_frames) > 0:
+                logging.info(f'{self.file_path}: Skipping keyframe analysis for encoded file (keyframes already exist, inherited from original)')
+                return
+            else:
+                logging.info(f'{self.file_path}: Encoded file detected but no keyframes found in DB, proceeding with keyframe analysis')
 
         try:
             if self.container_format != 'MPEG-TS':

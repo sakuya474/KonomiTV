@@ -1,11 +1,14 @@
 import asyncio
 import json
+import os
+import re
 from typing import Annotated, Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Path, WebSocket, WebSocketDisconnect, status
 from tortoise.exceptions import DoesNotExist
 
 from app import logging, schemas
+from app.models.EncodingTask import EncodingTask as EncodingTaskModel
 from app.models.RecordedProgram import RecordedProgram
 from app.models.User import User
 from app.routers.UsersRouter import GetCurrentUser
@@ -73,8 +76,45 @@ async def broadcast_progress_updates():
                     video_title = 'Unknown Video'
                     try:
                         if task.encoding_task.rec_file_id > 0:
-                            recorded_program = await RecordedProgram.get(id=task.encoding_task.rec_file_id)
-                            video_title = recorded_program.title or 'Unknown Video'
+                            from app.models.RecordedVideo import RecordedVideo
+                            try:
+                                recorded_video = await RecordedVideo.get(id=task.encoding_task.rec_file_id)
+                                # recorded_program_idから直接RecordedProgramを取得
+                                recorded_program = await RecordedProgram.get(id=recorded_video.recorded_program_id)
+                                video_title = recorded_program.title or 'Unknown Video'
+                            except DoesNotExist:
+                                # RecordedVideoが見つからない場合、output_file_pathから新しいRecordedVideoを検索
+                                # エンコード完了後にファイル名に_1などが追加される可能性があるため、ベース名から検索
+                                if task.encoding_task.output_file_path:
+                                    import pathlib
+                                    output_path = pathlib.Path(task.encoding_task.output_file_path)
+                                    # まず正確なパスで検索
+                                    recorded_video = await RecordedVideo.get_or_none(file_path=task.encoding_task.output_file_path)
+                                    # ベース名を事前に計算（後で使用するため）
+                                    stem = output_path.stem
+                                    base_stem = re.sub(r'_\d+$', '', stem)  # _1, _2などを除去
+                                    if not recorded_video:
+                                        # 見つからない場合、ベース名（_h264_1.ts -> _h264.ts）から検索
+                                        base_path = output_path.parent / f"{base_stem}{output_path.suffix}"
+                                        recorded_video = await RecordedVideo.get_or_none(file_path=str(base_path))
+                                    if not recorded_video:
+                                        # まだ見つからない場合、ファイル名に_h264, _h265, _av1を含むRecordedVideoを検索
+                                        base_name_pattern = base_stem
+                                        all_videos = await RecordedVideo.filter(file_path__contains=base_name_pattern).all()
+                                        # _h264, _h265, _av1を含むファイルを優先
+                                        for video in all_videos:
+                                            if '_h264' in video.file_path or '_h265' in video.file_path or '_av1' in video.file_path:
+                                                recorded_video = video
+                                                break
+                                        if not recorded_video and all_videos:
+                                            recorded_video = all_videos[0]
+                                    if recorded_video:
+                                        recorded_program = await RecordedProgram.get(id=recorded_video.recorded_program_id)
+                                        video_title = recorded_program.title or 'Unknown Video'
+                                    else:
+                                        logging.debug(f'RecordedVideo not found for task {task_id}: rec_file_id={task.encoding_task.rec_file_id}, output_file_path={task.encoding_task.output_file_path}. Title will be available after scan.')
+                                else:
+                                    logging.debug(f'RecordedVideo not found for task {task_id}: rec_file_id={task.encoding_task.rec_file_id}, output_file_path is None. Title will be available after scan.')
                     except Exception as e:
                         logging.warning(f'Failed to get video title for task {task_id}: {e}')
 
@@ -97,10 +137,8 @@ async def broadcast_progress_updates():
             if tasks_to_broadcast:
                 await manager.broadcast_json({'type': 'progress_update', 'tasks': tasks_to_broadcast})
 
-            # 完了/失敗/キャンセルしたタスクを _last_broadcast_states から削除
-            finished_task_ids = {task_id for task_id, state in list(_last_broadcast_states.items()) if state['status'] in ['completed', 'failed', 'cancelled']}
-            for task_id in finished_task_ids:
-                del _last_broadcast_states[task_id]
+            # 完了/失敗/キャンセルしたタスクも _last_broadcast_states に保持する（エラー履歴含めて残す）
+            # タスクは削除せずに保持する
 
         except Exception as ex:
             logging.error(f'[broadcast_progress_updates] Error: {ex}', exc_info=ex)
@@ -122,8 +160,12 @@ def register_auto_encoding_task(tsreplace_task: 'TSReplaceEncodingTask') -> None
     """自動エンコードタスクをWebSocket通知システムに登録する"""
     import asyncio
 
-    # タスクを管理辞書に追加
-    _running_tasks[tsreplace_task.encoding_task.task_id] = tsreplace_task
+    task_id = tsreplace_task.encoding_task.task_id
+
+    # タスクを管理辞書に追加（重複チェック）
+    if task_id in _running_tasks:
+        logging.warning(f'[register_auto_encoding_task] Task {task_id} already exists in _running_tasks, replacing with new task')
+    _running_tasks[task_id] = tsreplace_task
 
     # WebSocketブロードキャストタスクが実行されていない場合は開始
     global broadcast_task
@@ -133,15 +175,18 @@ def register_auto_encoding_task(tsreplace_task: 'TSReplaceEncodingTask') -> None
 
 def cleanup_auto_encoding_task(task_id: str) -> None:
     """
-    自動エンコードタスクをクリーンアップする
+    自動エンコードタスクをクリーンアップする（無効化: タスクは削除せずに保持する）
 
     Args:
         task_id: タスクID
     """
-    if task_id in _running_tasks:
-        del _running_tasks[task_id]
-    if task_id in _last_broadcast_states:
-        del _last_broadcast_states[task_id]
+    # タスクは削除せずに保持する（エラー履歴含めて残す）
+    # 完了後もタスクリストに残し、エラー履歴含めて最終状態をクライアントが取得できるようにする
+    logging.debug(f'cleanup_auto_encoding_task called for {task_id}, but keeping task in list for history')
+    # if task_id in _running_tasks:
+    #     del _running_tasks[task_id]
+    # if task_id in _last_broadcast_states:
+    #     del _last_broadcast_states[task_id]
 
 
 @router.post(
@@ -164,29 +209,36 @@ async def StartManualEncodingAPI(
         # 録画番組の存在確認
         recorded_program = await RecordedProgram.get(id=request.video_id).select_related('recorded_video')
 
-        # 再エンコード済み動画のチェック
-        if recorded_program.recorded_video.is_tsreplace_encoded:
-            logging.warning(f'[StartManualEncodingAPI] Cannot re-encode already encoded video [video_id: {request.video_id}]')
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail='Cannot re-encode already encoded video',
-            )
+        # 入力ファイルパスを決定
+        # 再エンコード済みの場合、元ファイルが存在する場合は元ファイルを使用、削除されている場合はエンコード済みファイルを使用
+        recorded_video = recorded_program.recorded_video
+        
+        # エンコード済みファイルが実際に存在するかチェック
+        has_encoded_file = recorded_video.is_tsreplace_encoded and recorded_video.encoded_file_path and os.path.exists(recorded_video.encoded_file_path)
+        
+        if has_encoded_file:
+            # エンコード済みファイルが存在する場合
+            # 元ファイルが存在するかチェック
+            if os.path.exists(recorded_video.file_path):
+                # 元ファイルが存在する場合、元ファイルから再エンコード
+                input_file_path = recorded_video.file_path
+                logging.info(f'[StartManualEncodingAPI] Re-encoding from original file (already encoded video) [video_id: {request.video_id}]')
+            else:
+                # 元ファイルが削除されている場合、エンコード済みファイルから再エンコード（画質劣化の可能性あり）
+                input_file_path = recorded_video.encoded_file_path
+                logging.warning(f'[StartManualEncodingAPI] Re-encoding from encoded file (original file deleted) [video_id: {request.video_id}] - Quality degradation may occur')
+        else:
+            # エンコード済みファイルが存在しない場合、未エンコードとして扱う
+            # データベースにis_tsreplace_encoded=Trueが設定されていても、実際のファイルが存在しない場合は未エンコードとして扱う
+            if recorded_video.is_tsreplace_encoded and recorded_video.encoded_file_path:
+                logging.warning(f'[StartManualEncodingAPI] is_tsreplace_encoded is True but encoded file does not exist, treating as unencoded [video_id: {request.video_id}, encoded_file_path: {recorded_video.encoded_file_path}]')
+            # 未エンコードの場合、通常通り元ファイルを使用
+            input_file_path = recorded_video.file_path
 
         # 出力ファイルパスを生成
-        input_file_path = recorded_program.recorded_video.file_path
         output_file_path = _generate_output_file_path(input_file_path, request.codec)
 
-        # エンコードタスクを作成
-        encoding_task = EncodingTask(
-            rec_file_id=recorded_program.recorded_video.id,
-            input_file_path=input_file_path,
-            output_file_path=output_file_path,
-            codec=request.codec,
-            encoder_type=request.encoder_type,
-            quality_preset=request.quality_preset
-        )
-
-        # TSReplaceEncodingTaskを直接実行
+        # TSReplaceEncodingTaskを作成（内部でEncodingTaskが作成される）
         tsreplace_task = TSReplaceEncodingTask(
             input_file_path=input_file_path,
             output_file_path=output_file_path,
@@ -199,26 +251,28 @@ async def StartManualEncodingAPI(
         # エンコードタスクのrec_file_idを設定
         tsreplace_task.encoding_task.rec_file_id = recorded_program.recorded_video.id
 
-        # タスクを管理辞書に追加
-        _running_tasks[encoding_task.task_id] = tsreplace_task
+        # タスクIDを取得（TSReplaceEncodingTask内部で生成されたものを使用）
+        task_id = tsreplace_task.encoding_task.task_id
+
+        # タスクを管理辞書に追加（重複チェック）
+        if task_id in _running_tasks:
+            logging.warning(f'[StartManualEncodingAPI] Task {task_id} already exists in _running_tasks, replacing with new task')
+        _running_tasks[task_id] = tsreplace_task
 
         # バックグラウンドでエンコード実行
         async def execute_and_cleanup():
             try:
                 await tsreplace_task.execute()
             finally:
-                # 完了後も一定時間タスクリストに残し、最終状態をクライアントが取得できるようにする
-                await asyncio.sleep(60 * 5)  # 5分間保持
-                if encoding_task.task_id in _running_tasks:
-                    del _running_tasks[encoding_task.task_id]
-                if encoding_task.task_id in _last_broadcast_states:
-                    del _last_broadcast_states[encoding_task.task_id]
+                # 完了後もタスクリストに残し、エラー履歴含めて最終状態をクライアントが取得できるようにする
+                # タスクは削除せずに保持する（エラー履歴含めて残す）
+                logging.info(f'Encoding task {task_id} completed, keeping in task list for history')
 
         asyncio.create_task(execute_and_cleanup())
 
         return schemas.TSReplaceEncodingResponse(
             success=True,
-            task_id=encoding_task.task_id,
+            task_id=task_id,
             detail='エンコードタスクを開始しました。',
         )
 
@@ -322,6 +376,55 @@ async def CancelEncodingAPI(
         )
 
 
+@router.delete(
+    '/task/{task_id}',
+    summary = 'エンコードタスク削除 API',
+    status_code = status.HTTP_204_NO_CONTENT,
+)
+async def DeleteEncodingTaskAPI(
+    task_id: Annotated[str, Path(description='エンコードタスクの ID 。')],
+    current_user: Annotated[User, Depends(GetCurrentUser)],
+):
+    """
+    指定されたエンコードタスクをデータベースから削除する。<br>
+    実行中のタスクは削除できない（先にキャンセルする必要がある）。<br>
+    JWT エンコードされたアクセストークンがリクエストの Authorization: Bearer に設定されている必要がある。
+    """
+
+    try:
+        # 実行中のタスクは削除できない
+        if task_id in _running_tasks:
+            task = _running_tasks[task_id]
+            if task.encoding_task.status in ['queued', 'processing']:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail='Cannot delete running or queued task. Please cancel it first.',
+                )
+
+        # データベースからタスクを削除
+        try:
+            db_task = await EncodingTaskModel.get(task_id=task_id)
+            await db_task.delete()
+            logging.info(f'[DeleteEncodingTaskAPI] Successfully deleted encoding task from database [task_id: {task_id}]')
+        except DoesNotExist:
+            logging.info(f'[DeleteEncodingTaskAPI] Task not found in database [task_id: {task_id}]')
+
+        # メモリ上のタスクも削除
+        if task_id in _running_tasks:
+            del _running_tasks[task_id]
+        if task_id in _last_broadcast_states:
+            del _last_broadcast_states[task_id]
+
+    except HTTPException:
+        raise
+    except Exception as ex:
+        logging.error(f'[DeleteEncodingTaskAPI] Failed to delete encoding task [task_id: {task_id}]:', exc_info=ex)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to delete encoding task: {ex!s}',
+        )
+
+
 @router.get(
     '/queue',
     summary = 'エンコードキュー取得 API',
@@ -341,13 +444,181 @@ async def GetEncodingQueueAPI():
         completed_tasks = []
         failed_tasks = []
 
+        # 重複を防ぐために、既に追加されたタスクIDを追跡
+        added_task_ids = set()
+
+        # データベースからすべてのタスクを取得（同じtask_idの場合は最新のもののみ）
+        # まず、すべてのタスクを取得してから、task_idでグループ化して最新のものだけを保持
+        all_db_tasks = await EncodingTaskModel.all().order_by('-created_at')
+        task_ids_from_db = set()
+
+        # task_idでグループ化し、最新のものだけを保持
+        db_tasks_dict = {}
+        duplicate_count = 0
+        for db_task in all_db_tasks:
+            task_id = db_task.task_id
+            if task_id not in db_tasks_dict:
+                db_tasks_dict[task_id] = db_task
+            else:
+                # 既に存在する場合、created_atが新しい方を保持
+                duplicate_count += 1
+                existing_task = db_tasks_dict[task_id]
+                if db_task.created_at and existing_task.created_at:
+                    if db_task.created_at > existing_task.created_at:
+                        db_tasks_dict[task_id] = db_task
+                        logging.warning(f'Duplicate task_id in database: {task_id}, keeping newer one (created_at: {db_task.created_at} vs {existing_task.created_at})')
+                    elif db_task.created_at == existing_task.created_at:
+                        # created_atが同じ場合、idが大きい方を保持（より新しいレコード）
+                        if db_task.id > existing_task.id:
+                            db_tasks_dict[task_id] = db_task
+                            logging.warning(f'Duplicate task_id in database: {task_id}, same created_at, keeping one with larger id ({db_task.id} vs {existing_task.id})')
+                elif db_task.created_at:
+                    db_tasks_dict[task_id] = db_task
+                    logging.warning(f'Duplicate task_id in database: {task_id}, keeping one with created_at')
+                elif db_task.id > existing_task.id:
+                    # created_atが両方Noneの場合、idが大きい方を保持
+                    db_tasks_dict[task_id] = db_task
+                    logging.warning(f'Duplicate task_id in database: {task_id}, both have no created_at, keeping one with larger id ({db_task.id} vs {existing_task.id})')
+
+        if duplicate_count > 0:
+            logging.warning(f'Found {duplicate_count} duplicate task_id(s) in database, kept only the latest ones')
+
+        db_tasks = list(db_tasks_dict.values())
+
+        for db_task in db_tasks:
+            task_ids_from_db.add(db_task.task_id)
+
+            # 重複チェック: 既に追加されたタスクIDはスキップ
+            if db_task.task_id in added_task_ids:
+                logging.warning(f'Duplicate task_id detected in database: {db_task.task_id}, skipping')
+                continue
+
+            # 番組タイトルを取得
+            video_title = 'Unknown Video'
+            try:
+                if db_task.rec_file_id > 0:
+                    from app.models.RecordedVideo import RecordedVideo
+                    try:
+                        recorded_video = await RecordedVideo.get(id=db_task.rec_file_id)
+                        # recorded_program_idから直接RecordedProgramを取得
+                        recorded_program = await RecordedProgram.get(id=recorded_video.recorded_program_id)
+                        video_title = recorded_program.title or 'Unknown Video'
+                    except DoesNotExist:
+                        # RecordedVideoが見つからない場合、output_file_pathから新しいRecordedVideoを検索
+                        # エンコード完了後にファイル名に_1などが追加される可能性があるため、ベース名から検索
+                        if db_task.output_file_path:
+                            import pathlib
+                            output_path = pathlib.Path(db_task.output_file_path)
+                            # まず正確なパスで検索
+                            recorded_video = await RecordedVideo.get_or_none(file_path=db_task.output_file_path)
+                            # ベース名を事前に計算（後で使用するため）
+                            stem = output_path.stem
+                            base_stem = re.sub(r'_\d+$', '', stem)  # _1, _2などを除去
+                            if not recorded_video:
+                                # 見つからない場合、ベース名（_h264_1.ts -> _h264.ts）から検索
+                                base_path = output_path.parent / f"{base_stem}{output_path.suffix}"
+                                recorded_video = await RecordedVideo.get_or_none(file_path=str(base_path))
+                            if not recorded_video:
+                                # まだ見つからない場合、ファイル名に_h264, _h265, _av1を含むRecordedVideoを検索
+                                base_name_pattern = base_stem
+                                all_videos = await RecordedVideo.filter(file_path__contains=base_name_pattern).all()
+                                # _h264, _h265, _av1を含むファイルを優先
+                                for video in all_videos:
+                                    if '_h264' in video.file_path or '_h265' in video.file_path or '_av1' in video.file_path:
+                                        recorded_video = video
+                                        break
+                                if not recorded_video and all_videos:
+                                    recorded_video = all_videos[0]
+                            if recorded_video:
+                                recorded_program = await RecordedProgram.get(id=recorded_video.recorded_program_id)
+                                video_title = recorded_program.title or 'Unknown Video'
+                            else:
+                                logging.debug(f'RecordedVideo not found for task {db_task.task_id}: rec_file_id={db_task.rec_file_id}, output_file_path={db_task.output_file_path}. Title will be available after scan.')
+                        else:
+                            logging.debug(f'RecordedVideo not found for task {db_task.task_id}: rec_file_id={db_task.rec_file_id}, output_file_path is None. Title will be available after scan.')
+            except Exception as e:
+                logging.warning(f'Failed to get video title for task {db_task.task_id}: {e}')
+
+            task_info = {
+                'task_id': db_task.task_id,
+                'video_id': db_task.rec_file_id,
+                'video_title': video_title,
+                'codec': db_task.codec,
+                'encoder_type': db_task.encoder_type,
+                'status': db_task.status,
+                'progress': db_task.progress / 100.0 if db_task.progress >= 0 else 0.0,  # データベースは0-100、APIは0.0-1.0
+                'created_at': db_task.created_at,
+                'started_at': db_task.started_at,
+                'completed_at': db_task.completed_at,
+                'error_message': db_task.error_message
+            }
+
+            if db_task.status == 'processing':
+                processing_tasks.append(task_info)
+            elif db_task.status == 'queued':
+                queued_tasks.append(task_info)
+            elif db_task.status == 'completed':
+                completed_tasks.append(task_info)
+            elif db_task.status in ['failed', 'cancelled']:
+                failed_tasks.append(task_info)
+
+            # 追加されたタスクIDを記録
+            added_task_ids.add(db_task.task_id)
+
+        # メモリ上のタスクでデータベースにないものも追加（実行中のタスク）
+        # メモリ上のタスクは最新の状態を反映しているため、データベースのタスクより優先する
         for task_id, task in _running_tasks.items():
+            # 重複チェック: 既に追加されたタスクIDはスキップ（メモリ上のタスクを優先するため、データベースのタスクを上書き）
+            if task_id in added_task_ids:
+                # データベースから追加されたタスクを削除して、メモリ上のタスクで置き換える
+                # まず、既存のタスクを各リストから削除
+                for task_list in [processing_tasks, queued_tasks, completed_tasks, failed_tasks]:
+                    task_list[:] = [t for t in task_list if t['task_id'] != task_id]
+                logging.debug(f'Task {task_id} already added from database, replacing with memory task (latest state)')
+
             # 番組タイトルを取得
             video_title = 'Unknown Video'
             try:
                 if task.encoding_task.rec_file_id > 0:
-                    recorded_program = await RecordedProgram.get(id=task.encoding_task.rec_file_id)
-                    video_title = recorded_program.title or 'Unknown Video'
+                    from app.models.RecordedVideo import RecordedVideo
+                    try:
+                        recorded_video = await RecordedVideo.get(id=task.encoding_task.rec_file_id)
+                        # recorded_program_idから直接RecordedProgramを取得
+                        recorded_program = await RecordedProgram.get(id=recorded_video.recorded_program_id)
+                        video_title = recorded_program.title or 'Unknown Video'
+                    except DoesNotExist:
+                        # RecordedVideoが見つからない場合、output_file_pathから新しいRecordedVideoを検索
+                        # エンコード完了後にファイル名に_1などが追加される可能性があるため、ベース名から検索
+                        if task.encoding_task.output_file_path:
+                            import pathlib
+                            output_path = pathlib.Path(task.encoding_task.output_file_path)
+                            # まず正確なパスで検索
+                            recorded_video = await RecordedVideo.get_or_none(file_path=task.encoding_task.output_file_path)
+                            # ベース名を事前に計算（後で使用するため）
+                            stem = output_path.stem
+                            base_stem = re.sub(r'_\d+$', '', stem)  # _1, _2などを除去
+                            if not recorded_video:
+                                # 見つからない場合、ベース名（_h264_1.ts -> _h264.ts）から検索
+                                base_path = output_path.parent / f"{base_stem}{output_path.suffix}"
+                                recorded_video = await RecordedVideo.get_or_none(file_path=str(base_path))
+                            if not recorded_video:
+                                # まだ見つからない場合、ファイル名に_h264, _h265, _av1を含むRecordedVideoを検索
+                                base_name_pattern = base_stem
+                                all_videos = await RecordedVideo.filter(file_path__contains=base_name_pattern).all()
+                                # _h264, _h265, _av1を含むファイルを優先
+                                for video in all_videos:
+                                    if '_h264' in video.file_path or '_h265' in video.file_path or '_av1' in video.file_path:
+                                        recorded_video = video
+                                        break
+                                if not recorded_video and all_videos:
+                                    recorded_video = all_videos[0]
+                            if recorded_video:
+                                recorded_program = await RecordedProgram.get(id=recorded_video.recorded_program_id)
+                                video_title = recorded_program.title or 'Unknown Video'
+                            else:
+                                logging.warning(f'Failed to find RecordedVideo for task {task_id}: rec_file_id={task.encoding_task.rec_file_id}, output_file_path={task.encoding_task.output_file_path}')
+                        else:
+                            logging.warning(f'Failed to find RecordedVideo for task {task_id}: rec_file_id={task.encoding_task.rec_file_id}, output_file_path is None')
             except Exception as e:
                 logging.warning(f'Failed to get video title for task {task_id}: {e}')
 
@@ -373,6 +644,26 @@ async def GetEncodingQueueAPI():
                 completed_tasks.append(task_info)
             elif task.encoding_task.status in ['failed', 'cancelled']:
                 failed_tasks.append(task_info)
+
+            # 追加されたタスクIDを記録
+            added_task_ids.add(task_id)
+
+        # 最終的な重複チェック: 各リスト内での重複を排除
+        def deduplicate_task_list(task_list: list) -> list:
+            seen_ids = set()
+            result = []
+            for task in task_list:
+                if task['task_id'] not in seen_ids:
+                    seen_ids.add(task['task_id'])
+                    result.append(task)
+                else:
+                    logging.warning(f'Duplicate task_id in final list: {task["task_id"]}, skipping')
+            return result
+
+        processing_tasks = deduplicate_task_list(processing_tasks)
+        queued_tasks = deduplicate_task_list(queued_tasks)
+        completed_tasks = deduplicate_task_list(completed_tasks)
+        failed_tasks = deduplicate_task_list(failed_tasks)
 
         return schemas.TSReplaceEncodingQueueResponse(
             success=True,

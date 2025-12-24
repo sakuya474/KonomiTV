@@ -483,9 +483,30 @@ const is_auto_encoding_disabled = computed(() =>
     !server_settings.value?.tsreplace_encoding?.auto_encoding_enabled || is_disabled.value
 );
 
-// エンコードタスク一覧
+// エンコードタスク一覧（重複を排除）
 const encodingTasks = computed(() => {
-    return encodingStore.getAllTasks().sort((a, b) => {
+    const allTasks = encodingStore.getAllTasks();
+
+    // taskIdで重複を排除（最新のものを保持）
+    const taskMap = new Map<string, typeof allTasks[0]>();
+    for (const task of allTasks) {
+        const existing = taskMap.get(task.taskId);
+        if (!existing) {
+            taskMap.set(task.taskId, task);
+        } else {
+            // 既に存在する場合、startedAtが新しい方を保持
+            if (task.startedAt && existing.startedAt) {
+                if (task.startedAt.getTime() > existing.startedAt.getTime()) {
+                    taskMap.set(task.taskId, task);
+                }
+            } else if (task.startedAt) {
+                taskMap.set(task.taskId, task);
+            }
+        }
+    }
+
+    // 重複排除後のタスクをソート
+    return Array.from(taskMap.values()).sort((a, b) => {
         // 実行中 > 待機中 > 完了 > 失敗の順で表示
         const statusOrder = { 'processing': 0, 'queued': 1, 'completed': 2, 'failed': 3, 'cancelled': 4 };
         const aOrder = statusOrder[a.status] ?? 5;
@@ -580,8 +601,8 @@ async function cancelTask(taskId: string) {
     }
 }
 
-function deleteTask(taskId: string) {
-    encodingStore.removeTask(taskId);
+async function deleteTask(taskId: string) {
+    await encodingStore.removeTask(taskId);
     // ポップアップを表示せずに静かに削除
 }
 
@@ -616,6 +637,7 @@ onMounted(async () => {
     // エンコードストアを初期化
     encodingStore.initializeWebSocket();
     encodingStore.startPeriodicCleanup();
+    encodingStore.startPeriodicRefresh();
     await encodingStore.refreshEncodingQueue();
 });
 

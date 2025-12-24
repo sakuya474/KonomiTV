@@ -149,6 +149,24 @@ class TSReplace {
     }
 
     /**
+     * エンコードタスクを削除する
+     * @param task_id エンコードタスクの ID
+     * @returns 削除に成功した場合は true
+     */
+    static async deleteEncodingTask(task_id: string): Promise<boolean> {
+        // API リクエストを実行
+        const response = await APIClient.delete(`/tsreplace/task/${task_id}`);
+
+        // エラー処理
+        if (response.type === 'error') {
+            APIClient.showGenericError(response, 'エンコードタスクの削除に失敗しました。');
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
      * ハードウェアエンコーダーの利用可否を確認する
      * @returns ハードウェアエンコーダーの利用可否情報
      */
