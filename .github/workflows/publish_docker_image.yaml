@@ -67,7 +67,7 @@ jobs:
       # ref: https://github.com/vlaurin/action-ghcr-prune
       # シークレットが設定されていない場合はスキップ
       - name: Prune Untagged Docker Images
-        if: ${{ secrets.DELETE_GHCR_IMAGES_TOKEN != '' }}
+        if: secrets.DELETE_GHCR_IMAGES_TOKEN != ''
         uses: vlaurin/action-ghcr-prune@v0.6.0
         with:
           token: ${{ secrets.DELETE_GHCR_IMAGES_TOKEN }}
