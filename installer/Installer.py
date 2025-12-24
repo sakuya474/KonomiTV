@@ -595,6 +595,17 @@ def Installer(version: str, install_fork: bool) -> None:
                 break
             print(Padding('[red]Discord Bot Token を入力してください。', (0, 2, 0, 2)))
 
+    # ***** Akebi HTTPS リバースプロキシの使用設定 *****
+    table_09_5 = CreateTable()
+    table_09_5.add_column('09-5. Akebi HTTPS リバースプロキシを使用しますか？')
+    table_09_5.add_row('true に設定すると、Akebi による HTTPS リバースプロキシを使用します（https://my.local.konomi.tv:7000/ としてアクセス可能）。')
+    table_09_5.add_row('false に設定すると、Akebi を使用せずに Uvicorn を直接 IP アドレスでアクセス可能にします（http://127.0.0.1:7000 としてアクセス可能、HTTP のみ）。')
+    table_09_5.add_row('デフォルトは true です。')
+    print(Padding(table_09_5, (1, 2, 1, 2)))
+
+    # Akebi HTTPS リバースプロキシを使用するか
+    use_akebi = bool(CustomConfirm.ask('Akebi HTTPS リバースプロキシを使用する', default=True))
+
     # ***** ソースコードのダウンロード *****
 
     # Git コマンドがインストールされているかどうか
@@ -734,6 +745,7 @@ def Installer(version: str, install_fork: bool) -> None:
             config_dict['general']['mirakurun_url'] = mirakurun_url
         config_dict['general']['encoder'] = encoder
         config_dict['server']['port'] = server_port
+        config_dict['server']['use_akebi'] = use_akebi
         config_dict['video']['recorded_folders'] = recorded_folders
         config_dict['video']['bd_library_folders'] = bd_library_folders
         config_dict['capture']['upload_folders'] = capture_upload_folders
