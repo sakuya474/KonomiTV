@@ -83,7 +83,7 @@ jobs:
         env:
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
-          echo version=$(echo "$COMMIT_MESSAGE" | sed -e 's/Release: version //') >> $GITHUB_OUTPUT
+          echo version=$(echo "$COMMIT_MESSAGE" | sed -e 's/Release: version //' | sed -e 's/ -.*$//') >> $GITHUB_OUTPUT
 
       # リリースコミットに対応する新バージョンのタグを release ブランチで作成
       - name: Create New Version Tag
