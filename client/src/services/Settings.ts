@@ -128,6 +128,7 @@ export interface IServerSettings {
     };
     server: {
         port: number;
+        use_akebi: boolean;
         custom_https_certificate: string | null;
         custom_https_private_key: string | null;
     };
@@ -185,6 +186,7 @@ export const IServerSettingsDefault: IServerSettings = {
     },
     server: {
         port: 7000,
+        use_akebi: true,
         custom_https_certificate: null,
         custom_https_private_key: null,
     },

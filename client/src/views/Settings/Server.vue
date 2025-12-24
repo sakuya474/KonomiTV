@@ -155,6 +155,17 @@
                     v-model="server_settings.server.port">
                 </v-text-field>
             </div>
+            <div class="settings__item settings__item--switch">
+                <label class="settings__item-heading" for="use_akebi">Akebi HTTPS リバースプロキシを使用する</label>
+                <label class="settings__item-label" for="use_akebi">
+                    true に設定すると、Akebi による HTTPS リバースプロキシを使用します（https://my.local.konomi.tv:7000/ としてアクセス可能）。<br>
+                    false に設定すると、Akebi を使用せずに Uvicorn を直接 IP アドレスでアクセス可能にします（http://127.0.0.1:7000 としてアクセス可能、HTTP のみ）。<br>
+                    デフォルトは true です。<br>
+                </label>
+                <v-switch class="settings__item-switch" color="primary" id="use_akebi" hide-details
+                    v-model="server_settings.server.use_akebi">
+                </v-switch>
+            </div>
             <div class="settings__item">
                 <div class="settings__item-heading">HTTPS リバースプロキシのカスタム HTTPS 証明書/秘密鍵ファイルへの絶対パス</div>
                 <div class="settings__item-label">
