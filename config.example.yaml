@@ -74,6 +74,12 @@ server:
     # デフォルトのリッスンポートは 7000 です。
     port: 7000
 
+    # Akebi HTTPS リバースプロキシを使用するか
+    # false に設定すると、Akebi を使用せずに Uvicorn を直接 IP アドレスでアクセス可能にします（HTTP のみ）。
+    # true に設定すると、Akebi による HTTPS リバースプロキシを使用します（HTTPS アクセス可能）。
+    # デフォルトは true です。
+    use_akebi: true
+
     # HTTPS リバースプロキシのカスタム HTTPS 証明書/秘密鍵ファイルへの絶対パス
     # 設定すると、Akebi Keyless Server の代わりに、カスタム HTTPS 証明書を使って HTTPS リバースプロキシを開始します。
     # カスタム HTTPS 証明書を有効化すると、https://192-168-x-xx.local.konomi.tv:7000/ の URL では KonomiTV にアクセスできなくなります。

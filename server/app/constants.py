@@ -1,4 +1,5 @@
 
+import logging
 import pkgutil
 import secrets
 import sys
@@ -11,7 +12,7 @@ from pydantic import BaseModel, PositiveInt
 
 
 # バージョン
-VERSION = '0.3.1'
+VERSION = '0.3.3'
 
 # ベースディレクトリ
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -80,6 +81,18 @@ DATABASE_CONFIG = {
     }
 }
 
+# 無効なHTTPリクエストの警告を抑制するフィルター
+class InvalidHTTPRequestFilter(logging.Filter):
+    """
+    無効なHTTPリクエストの警告メッセージをフィルタリングする
+    ポートスキャンやボットからの接続試行による警告を抑制する
+    """
+    def filter(self, record: logging.LogRecord) -> bool:
+        # "Invalid HTTP request received" というメッセージを除外
+        if record.getMessage().startswith('Invalid HTTP request received'):
+            return False
+        return True
+
 # Uvicorn のロギング設定
 ## この dictConfig を Uvicorn に渡す (KonomiTV 本体のロギング設定は app.logging に別で存在する)
 ## Uvicorn のもとの dictConfig を参考にして作成した
@@ -127,12 +140,18 @@ LOGGING_CONFIG: dict[str, Any] = {
             'use_colors': False,  # ANSI エスケープシーケンスを出力しない
         },
     },
+    'filters': {
+        'invalid_http_request_filter': {
+            '()': InvalidHTTPRequestFilter,
+        },
+    },
     'handlers': {
         ## サーバーログは標準エラー出力と server/logs/KonomiTV-Server.log の両方に出力する
         'default': {
             'formatter': 'default',
             'class': 'logging.StreamHandler',
             'stream': 'ext://sys.stderr',
+            'filters': ['invalid_http_request_filter'],
         },
         'default_file': {
             'formatter': 'default_file',
@@ -140,6 +159,7 @@ LOGGING_CONFIG: dict[str, Any] = {
             'filename': KONOMITV_SERVER_LOG_PATH,
             'mode': 'a',
             'encoding': 'utf-8',
+            'filters': ['invalid_http_request_filter'],
         },
         ## サーバーログ (デバッグ) は標準エラー出力と server/logs/KonomiTV-Server.log の両方に出力する
         'debug': {

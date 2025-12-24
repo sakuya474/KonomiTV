@@ -313,6 +313,7 @@ class _ServerSettingsServer(BaseModel):
     port: PositiveInt = 7000
     custom_https_certificate: FilePath | None = None
     custom_https_private_key: FilePath | None = None
+    use_akebi: bool = True
 
     @field_validator('port')
     def validate_port(cls, port: int, info: ValidationInfo) -> int:
