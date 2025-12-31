@@ -25,7 +25,7 @@ from Utils import ShowPanel
 
 
 # インストール or アップデート対象の KonomiTV バージョン
-TARGET_VERSION = '0.3.3'
+TARGET_VERSION = '0.3.6'
 
 def ShowHeader():
     print(Padding(Rule(
@@ -128,7 +128,7 @@ def main():
     table_fork.add_row('フォーク版 (sakuya474/KonomiTV): カスタマイズ版で、BDライブラリ機能などが追加されています')
     table_fork.add_row('本家版 (tsukumijima/KonomiTV): オリジナル版で、安定性を重視しています')
     print(Padding(table_fork, (1, 2, 1, 2)))
-    
+
     install_type = CustomPrompt.ask('フォーク版をインストールしますか？(y/n)', default='y', choices=['y', 'n'])
 
     # 実行タイプ (インストール or アップデート or アンインストール)
@@ -177,6 +177,7 @@ if __name__ == '__main__':
             raise KeyboardInterrupt()
     signal.signal(signal.SIGINT, keyboard_interrupt_handler)
 
+    should_run_main = True
     try:
 
         # 管理者権限 (Windows) / root 権限 (Linux) に昇格
@@ -186,6 +187,7 @@ if __name__ == '__main__':
 
     # UAC がキャンセルされるなどして管理者権限が得られなかったとき
     except OSError:
+        should_run_main = False
         # ヘッダーを表示
         ShowHeader()
         if os.name == 'nt':
@@ -197,9 +199,14 @@ if __name__ == '__main__':
             ShowPanel([
                 '[yellow]KonomiTV のインストール/アップデート/アンインストールには root 権限が必要です。[/yellow]',
             ])
+    # 日本語パスが含まれている場合、elevate ライブラリが UnicodeEncodeError を発生させる可能性がある
+    ## この場合は既に管理者権限で実行されている可能性が高いので、そのまま続行する
+    except UnicodeEncodeError:
+        # 開発環境でのテスト時など、既に管理者権限で実行されている場合はそのまま続行
+        should_run_main = True
 
     # main() を実行
-    else:
+    if should_run_main:
         try:
             main()
         except KeyboardInterrupt:

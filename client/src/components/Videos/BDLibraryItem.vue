@@ -255,7 +255,7 @@ const showBDInfo = () => {
 // BD削除確認ダイアログを表示
 const showDeleteConfirmation = () => {
     if (userStore.user === null || userStore.user.is_admin === false) {
-        Message.error('BDを削除するには管理者権限が必要です。\n管理者アカウントでログインし直してください。');
+        Message.error('この操作を実行するには管理者権限が必要です。管理者アカウントでログインし直してください。');
         return;
     }
     show_delete_confirmation.value = true;

@@ -11,7 +11,7 @@ from app import logging, schemas
 from app.models.EncodingTask import EncodingTask as EncodingTaskModel
 from app.models.RecordedProgram import RecordedProgram
 from app.models.User import User
-from app.routers.UsersRouter import GetCurrentUser
+from app.routers.UsersRouter import GetCurrentAdminUser, GetCurrentUser
 from app.streams.TSReplaceEncodingTask import TSReplaceEncodingTask
 from app.schemas import EncodingTask
 
@@ -197,12 +197,12 @@ def cleanup_auto_encoding_task(task_id: str) -> None:
 )
 async def StartManualEncodingAPI(
     request: schemas.TSReplaceManualEncodingRequest,
-    current_user: Annotated[User, Depends(GetCurrentUser)],
+    current_user: Annotated[User, Depends(GetCurrentAdminUser)],
 ):
     """
     指定された録画番組の手動エンコードを開始する。<br>
     エンコード方式（ソフトウェア/ハードウェア）とコーデック（H.264/HEVC）を指定できる。<br>
-    JWT エンコードされたアクセストークンがリクエストの Authorization: Bearer に設定されている必要がある。
+    JWT エンコードされたアクセストークンがリクエストの Authorization: Bearer に設定されていて、かつ管理者アカウントでないとアクセスできない。
     """
 
     try:
@@ -298,11 +298,11 @@ async def StartManualEncodingAPI(
 )
 async def GetEncodingStatusAPI(
     task_id: Annotated[str, Path(description='エンコードタスクの ID 。')],
-    current_user: Annotated[User, Depends(GetCurrentUser)],
+    current_user: Annotated[User, Depends(GetCurrentAdminUser)],
 ):
     """
     指定されたエンコードタスクの状況を取得する。<br>
-    JWT エンコードされたアクセストークンがリクエストの Authorization: Bearer に設定されている必要がある。
+    JWT エンコードされたアクセストークンがリクエストの Authorization: Bearer に設定されていて、かつ管理者アカウントでないとアクセスできない。
     """
 
     try:
@@ -344,12 +344,12 @@ async def GetEncodingStatusAPI(
 )
 async def CancelEncodingAPI(
     task_id: Annotated[str, Path(description='エンコードタスクの ID 。')],
-    current_user: Annotated[User, Depends(GetCurrentUser)],
+    current_user: Annotated[User, Depends(GetCurrentAdminUser)],
 ):
     """
     指定されたエンコードタスクをキャンセルする。<br>
     実行中のエンコード処理は安全に停止され、一時ファイルは削除される。<br>
-    JWT エンコードされたアクセストークンがリクエストの Authorization: Bearer に設定されている必要がある。
+    JWT エンコードされたアクセストークンがリクエストの Authorization: Bearer に設定されていて、かつ管理者アカウントでないとアクセスできない。
     """
 
     try:
@@ -383,12 +383,12 @@ async def CancelEncodingAPI(
 )
 async def DeleteEncodingTaskAPI(
     task_id: Annotated[str, Path(description='エンコードタスクの ID 。')],
-    current_user: Annotated[User, Depends(GetCurrentUser)],
+    current_user: Annotated[User, Depends(GetCurrentAdminUser)],
 ):
     """
     指定されたエンコードタスクをデータベースから削除する。<br>
     実行中のタスクは削除できない（先にキャンセルする必要がある）。<br>
-    JWT エンコードされたアクセストークンがリクエストの Authorization: Bearer に設定されている必要がある。
+    JWT エンコードされたアクセストークンがリクエストの Authorization: Bearer に設定されていて、かつ管理者アカウントでないとアクセスできない。
     """
 
     try:
@@ -431,11 +431,13 @@ async def DeleteEncodingTaskAPI(
     response_description = 'エンコードキューの状況。',
     response_model = schemas.TSReplaceEncodingQueueResponse,
 )
-async def GetEncodingQueueAPI():
+async def GetEncodingQueueAPI(
+    current_user: Annotated[User, Depends(GetCurrentAdminUser)],
+):
     """
     現在のエンコードキューの状況を取得する。<br>
     実行中・待機中・完了済みのエンコードタスクの一覧を返す。<br>
-    認証は不要です。
+    JWT エンコードされたアクセストークンがリクエストの Authorization: Bearer に設定されていて、かつ管理者アカウントでないとアクセスできない。
     """
 
     try:

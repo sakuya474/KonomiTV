@@ -27,7 +27,7 @@ class Maintenance {
         // アクセストークンを取得
         const access_token = Utils.getAccessToken();
         if (access_token === null) {
-            Message.error('サーバーログの表示には管理者権限が必要です。\n管理者アカウントでログインし直してください。');
+            Message.error('この操作を実行するには管理者権限が必要です。管理者アカウントでログインし直してください。');
             return null;
         }
 
@@ -55,7 +55,7 @@ class Maintenance {
                 console.error('Log stream error:', error);
                 // 認証エラーなどの場合は再接続を試みない
                 if (error instanceof Response && (error.status === 401 || error.status === 403)) {
-                    Message.error('サーバーログの表示には管理者権限が必要です。\n管理者アカウントでログインし直してください。');
+                    Message.error('この操作を実行するには管理者権限が必要です。管理者アカウントでログインし直してください。');
                     abort_controller.abort();
                     return;
                 }

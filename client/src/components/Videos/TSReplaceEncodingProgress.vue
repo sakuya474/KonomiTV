@@ -130,6 +130,7 @@ import type { EncodingTaskStatus } from '@/services/TSReplace';
 import Message from '@/message';
 import TSReplace from '@/services/TSReplace';
 import useTSReplaceEncodingStore from '@/stores/TSReplaceEncodingStore';
+import useUserStore from '@/stores/UserStore';
 
 const props = withDefaults(defineProps<{
     taskId?: string;
@@ -146,6 +147,7 @@ const emit = defineEmits<{
 }>();
 
 const store = useTSReplaceEncodingStore();
+const userStore = useUserStore();
 const task = computed(() => props.taskId ? store.getTask(props.taskId) : null);
 
 // WebSocketを初期化
@@ -180,11 +182,13 @@ const isIndeterminate = computed(() => {
 });
 
 const canCancel = computed(() => {
-    return ['queued', 'processing'].includes(status.value) && !isCancelling.value;
+    const isAdmin = userStore.user !== null && userStore.user.is_admin === true;
+    return isAdmin && ['queued', 'processing'].includes(status.value) && !isCancelling.value;
 });
 
 const canDelete = computed(() => {
-    return ['completed', 'failed', 'cancelled'].includes(status.value);
+    const isAdmin = userStore.user !== null && userStore.user.is_admin === true;
+    return isAdmin && ['completed', 'failed', 'cancelled'].includes(status.value);
 });
 
 const getStatusText = computed(() => {

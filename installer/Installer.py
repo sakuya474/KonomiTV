@@ -457,6 +457,7 @@ def Installer(version: str, install_fork: bool) -> None:
 
         # 何も入力されなかった場合は入力を終了
         if encoded_folder_input == '':
+            # 既に有効なフォルダが設定されている場合はそのまま終了、設定されていない場合は空文字のまま終了（自動作成される）
             break
 
         # 入力されたパスを Path オブジェクトに変換
@@ -476,7 +477,7 @@ def Installer(version: str, install_fork: bool) -> None:
         # すべてのバリデーションを通過
         encoded_folder = str(encoded_folder_path)
         print(Padding(f'[green]エンコード済みファイルの保存先フォルダ: {encoded_folder}', (0, 2, 0, 2)))
-        break
+        # エンコードフォルダは1つのみなので、有効なパスが設定された後はループを続ける（エンターキーで確定するまで）
 
     # ***** BDライブラリの設定 *****
     table_07 = CreateTable()
@@ -1355,11 +1356,21 @@ def Installer(version: str, install_fork: bool) -> None:
     ))
 
     # アクセス可能な URL のリストを IP アドレスごとに表示
-    ## ローカルホスト (127.0.0.1) だけは https://my.local.konomi.tv:7000/ というエイリアスが使える
-    urls = [f'https://{nic_info[0].replace(".", "-")}.local.konomi.tv:{server_port}/' for nic_info in nic_infos]
-    urls_max_length = max([len(url) for url in urls])  # URL の最大文字長を取得
-    table_done.add_row(f'[bright_blue]{f"https://my.local.konomi.tv:{server_port}/": <{urls_max_length}}[/bright_blue] (ローカルホスト)')
-    for index, url in enumerate(urls):
-        table_done.add_row(f'[bright_blue]{url: <{urls_max_length}}[/bright_blue] ({nic_infos[index][1]})')
+    ## use_akebi が True の場合は HTTPS、False の場合は HTTP を使用
+    ## use_akebi が True の場合は https://my.local.konomi.tv:7000/ というエイリアスが使える
+    ## use_akebi が False の場合は http://127.0.0.1:7000/ や http://192.168.0.204:7000/ のように直接IPアドレスでアクセス
+    protocol = 'https' if use_akebi is True else 'http'
+    if use_akebi is True:
+        urls = [f'https://{nic_info[0].replace(".", "-")}.local.konomi.tv:{server_port}/' for nic_info in nic_infos]
+        urls_max_length = max([len(url) for url in urls]) if urls else 50  # URL の最大文字長を取得
+        table_done.add_row(f'[bright_blue]{f"https://my.local.konomi.tv:{server_port}/": <{urls_max_length}}[/bright_blue] (ローカルホスト)')
+        for index, url in enumerate(urls):
+            table_done.add_row(f'[bright_blue]{url: <{urls_max_length}}[/bright_blue] ({nic_infos[index][1]})')
+    else:
+        urls = [f'http://{nic_info[0]}:{server_port}/' for nic_info in nic_infos]
+        urls_max_length = max([len(url) for url in urls]) if urls else 50  # URL の最大文字長を取得
+        table_done.add_row(f'[bright_blue]{f"http://127.0.0.1:{server_port}/": <{urls_max_length}}[/bright_blue] (ローカルホスト)')
+        for index, url in enumerate(urls):
+            table_done.add_row(f'[bright_blue]{url: <{urls_max_length}}[/bright_blue] ({nic_infos[index][1]})')
 
     print(Padding(table_done, (1, 2, 0, 2)))

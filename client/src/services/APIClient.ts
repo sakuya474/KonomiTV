@@ -232,7 +232,7 @@ class APIClient {
                 return;
             }
             case 'Don\'t have permission to access this resource': {
-                Message.error(`${template}\nこのリソースにアクセスする権限がありません。`);
+                Message.error('このリソースにアクセスする権限がありません。管理者アカウントでログインし直してください。');
                 return;
             }
             default: {

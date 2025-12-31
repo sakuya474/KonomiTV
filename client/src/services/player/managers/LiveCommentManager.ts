@@ -284,7 +284,7 @@ class LiveCommentManager implements PlayerManager {
                             error = `${this.watch_session_type}のコメント部屋を取得できません。`;
                             break;
                         case 'NO_PERMISSION':
-                            error = `${this.watch_session_type}の API にアクセスする権限がありません。`;
+                            error = `このリソースにアクセスする権限がありません。管理者アカウントでログインし直してください。`;
                             break;
                         case 'NOT_ON_AIR':
                             error = `${this.watch_session_type}が放送中ではありません。`;

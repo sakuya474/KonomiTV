@@ -129,8 +129,8 @@
                         </v-list-item>
                         <v-divider></v-divider>
                         <v-list-item @click="showEncodingDialog"
-                            :disabled="program.recorded_video.status === 'Recording' || isEncoding"
-                            v-ftooltip="'録画ファイルをH.264またはHEVCに再エンコードします'">
+                            :disabled="program.recorded_video.status === 'Recording' || isEncoding || !userStore.user || userStore.user.is_admin === false"
+                            v-ftooltip="userStore.user && userStore.user.is_admin ? '録画ファイルをH.264またはHEVCに再エンコードします' : 'この操作を実行するには管理者権限が必要です'">
                             <template v-slot:prepend>
                                 <Icon icon="fluent:arrow-sync-20-regular" width="20px" height="20px" />
                             </template>
@@ -219,6 +219,8 @@ const show_encoding_dialog = ref(false);
 
 // エンコードストア
 const encodingStore = useTSReplaceEncodingStore();
+// ユーザーストア
+const userStore = useUserStore();
 
 // この録画番組がエンコード中かどうか
 const isEncoding = computed(() => {
@@ -246,6 +248,10 @@ const encodingProgress = computed(() => {
 
 // エンコードダイアログを表示
 const showEncodingDialog = () => {
+    if (userStore.user === null || userStore.user.is_admin === false) {
+        Message.error('この操作を実行するには管理者権限が必要です。管理者アカウントでログインし直してください。');
+        return;
+    }
     show_encoding_dialog.value = true;
 };
 
@@ -331,7 +337,7 @@ const removeFromWatchedHistory = () => {
 const showDeleteConfirmation = () => {
     const userStore = useUserStore();
     if (userStore.user === null || userStore.user.is_admin === false) {
-        Message.warning('録画ファイルを削除するには管理者権限が必要です。\n管理者アカウントでログインし直してください。');
+        Message.error('この操作を実行するには管理者権限が必要です。管理者アカウントでログインし直してください。');
         return;
     }
     show_delete_confirmation.value = true;

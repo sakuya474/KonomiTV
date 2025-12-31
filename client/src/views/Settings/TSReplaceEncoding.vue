@@ -578,11 +578,13 @@ function formatProgress(progress: number): string {
 
 // エンコードタスクの操作関数
 function canCancelTask(status: string): boolean {
-    return ['queued', 'processing'].includes(status);
+    const isAdmin = userStore.user !== null && userStore.user.is_admin === true;
+    return isAdmin && ['queued', 'processing'].includes(status);
 }
 
 function canDeleteTask(status: string): boolean {
-    return ['completed', 'failed', 'cancelled'].includes(status);
+    const isAdmin = userStore.user !== null && userStore.user.is_admin === true;
+    return isAdmin && ['completed', 'failed', 'cancelled'].includes(status);
 }
 
 async function cancelTask(taskId: string) {

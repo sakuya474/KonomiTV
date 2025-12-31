@@ -184,7 +184,7 @@ function startLogStreaming(log_type: 'server' | 'access') {
 
     // 接続に失敗した場合
     if (abort_controller === null) {
-        const error_message = 'サーバーログの表示には管理者権限が必要です。\n管理者アカウントでログインし直してください。';
+        const error_message = 'この操作を実行するには管理者権限が必要です。管理者アカウントでログインし直してください。';
         if (log_type === 'server') {
             server_log_lines.value = [error_message];
         } else {

@@ -18,8 +18,8 @@
                 <v-select v-if="!hideSort"
                     v-model="sort_order"
                     :items="[
-                        { title: '追加が新しい順', value: 'added_desc' },
-                        { title: '追加が古い順', value: 'added_asc' },
+                        { title: '新しい順', value: 'added_desc' },
+                        { title: '古い順', value: 'added_asc' },
                     ]"
                     item-title="title"
                     item-value="value"
